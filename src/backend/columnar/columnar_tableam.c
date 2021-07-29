@@ -258,9 +258,30 @@ init_columnar_read_state(Relation relation, TupleDesc tupdesc, Bitmapset *attr_n
 	Oid relfilenode = relation->rd_node.relNode;
 	FlushWriteStateForRelfilenode(relfilenode, GetCurrentSubTransactionId());
 
+	bool snapshotCreatedByUs = false;
+	if (snapshot != InvalidSnapshot && IsMVCCSnapshot(snapshot))
+	{
+		/*
+		 * If we flushed any pending writes, then we should guarantee that
+		 * those writes are visible to us too. For this reason, if given
+		 * snapshot is an MVCC snapshot, then we set its curcid to current
+		 * command id.
+		 *
+		 * For simplicity, we do that even if we didn't flush any writes
+		 * since we don't see any problem with pushing a new snapshot.
+		 */
+		PushCopiedSnapshot(snapshot);
+		UpdateActiveSnapshotCommandId();
+
+		/* now our snapshot is the active one */
+		snapshot = GetActiveSnapshot();
+		snapshotCreatedByUs = true;
+	}
+
 	List *neededColumnList = NeededColumnsList(tupdesc, attr_needed);
 	ColumnarReadState *readState = ColumnarBeginRead(relation, tupdesc, neededColumnList,
-													 scanQual, scanContext, snapshot);
+													 scanQual, scanContext, snapshot,
+													 snapshotCreatedByUs);
 
 	MemoryContextSwitchTo(oldContext);
 

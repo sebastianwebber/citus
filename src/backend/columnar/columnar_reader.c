@@ -90,6 +90,7 @@ struct ColumnarReadState
 	MemoryContext scanContext;
 
 	Snapshot snapshot;
+	bool snapshotCreatedByUs;
 };
 
 /* static function declarations */
@@ -171,7 +172,8 @@ static Datum ColumnDefaultValue(TupleConstr *tupleConstraints,
 ColumnarReadState *
 ColumnarBeginRead(Relation relation, TupleDesc tupleDescriptor,
 				  List *projectedColumnList, List *whereClauseList,
-				  MemoryContext scanContext, Snapshot snapshot)
+				  MemoryContext scanContext, Snapshot snapshot,
+				  bool snapshotCreatedByUs)
 {
 	/*
 	 * We allocate all stripe specific data in the stripeReadContext, and reset
@@ -194,6 +196,7 @@ ColumnarBeginRead(Relation relation, TupleDesc tupleDescriptor,
 																 snapshot);
 	readState->scanContext = scanContext;
 	readState->snapshot = snapshot;
+	readState->snapshotCreatedByUs = snapshotCreatedByUs;
 
 	return readState;
 }
@@ -467,6 +470,15 @@ ColumnarRescan(ColumnarReadState *readState)
 void
 ColumnarEndRead(ColumnarReadState *readState)
 {
+	if (readState->snapshotCreatedByUs)
+	{
+		/*
+		 * init_columnar_read_state created a new snapshot and pushed it as
+		 * the active one, so now forget it.
+		 */
+		PopActiveSnapshot();
+	}
+
 	MemoryContextDelete(readState->stripeReadContext);
 	if (readState->currentStripeMetadata)
 	{
