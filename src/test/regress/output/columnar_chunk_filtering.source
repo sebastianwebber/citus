@@ -195,12 +195,61 @@ select filtered_row_count('select count(*) from part_table where id > 75000');
                5000
 (1 row)
 
+prepare prep_part_table (int) as select count(*) from part_table where id > $1;
+execute prep_part_table(75000);
+ count
+---------------------------------------------------------------------
+ 84999
+(1 row)
+
+execute prep_part_table(75000);
+ count
+---------------------------------------------------------------------
+ 84999
+(1 row)
+
+execute prep_part_table(75000);
+ count
+---------------------------------------------------------------------
+ 84999
+(1 row)
+
+execute prep_part_table(75000);
+ count
+---------------------------------------------------------------------
+ 84999
+(1 row)
+
+select filtered_row_count('execute prep_part_table(75000);');
+ filtered_row_count
+---------------------------------------------------------------------
+               5000
+(1 row)
+
+select filtered_row_count('execute prep_part_table(75000);');
+ filtered_row_count
+---------------------------------------------------------------------
+               5000
+(1 row)
+
+select filtered_row_count('execute prep_part_table(75000);');
+ filtered_row_count
+---------------------------------------------------------------------
+               5000
+(1 row)
+
+select filtered_row_count('execute prep_part_table(75000);');
+ filtered_row_count
+---------------------------------------------------------------------
+               5000
+(1 row)
+
 drop table part_table;
 --
 -- https://github.com/citusdata/citus/issues/4488
 --
-create table columnar_prepared_stmt (x int, y int) using columnar;
-insert into columnar_prepared_stmt select s, s from generate_series(1,5000000) s;
+create table columnar_prepared_stmt (x int, y text) using columnar;
+insert into columnar_prepared_stmt select s, s::text from generate_series(1,5000000) s;
 prepare foo (int) as select x from columnar_prepared_stmt where x = $1;
 execute foo(3);
  x
@@ -250,4 +299,83 @@ select filtered_row_count('execute foo(3)');
                9999
 (1 row)
 
+prepare prep_stmt_drop_col (text) as select y from columnar_prepared_stmt where y = $1;
+EXECUTE prep_stmt_drop_col('3');
+ y
+---------------------------------------------------------------------
+ 3
+(1 row)
+
+EXECUTE prep_stmt_drop_col('3');
+ y
+---------------------------------------------------------------------
+ 3
+(1 row)
+
+EXECUTE prep_stmt_drop_col('3');
+ y
+---------------------------------------------------------------------
+ 3
+(1 row)
+
+EXECUTE prep_stmt_drop_col('3');
+ y
+---------------------------------------------------------------------
+ 3
+(1 row)
+
+EXECUTE prep_stmt_drop_col('3');
+ y
+---------------------------------------------------------------------
+ 3
+(1 row)
+
+EXECUTE prep_stmt_drop_col('3');
+ y
+---------------------------------------------------------------------
+ 3
+(1 row)
+
+SELECT filtered_row_count($$ EXECUTE prep_stmt_drop_col('3'); $$);
+ filtered_row_count
+---------------------------------------------------------------------
+              59999
+(1 row)
+
+BEGIN;
+  ALTER TABLE columnar_prepared_stmt DROP COLUMN x;
+  SELECT filtered_row_count($$ EXECUTE prep_stmt_drop_col('3'); $$);
+ filtered_row_count
+---------------------------------------------------------------------
+              59999
+(1 row)
+
+ROLLBACK;
+BEGIN;
+  ALTER TABLE columnar_prepared_stmt DROP COLUMN y;
+  EXECUTE prep_stmt_drop_col('3');
+ERROR:  column "y" does not exist
+ROLLBACK;
 drop table columnar_prepared_stmt;
+CREATE TABLE null_if_test (
+  i integer,
+  f double precision
+) USING columnar;
+SELECT alter_columnar_table_set('null_if_test', chunk_group_row_limit => 1000);
+ alter_columnar_table_set
+---------------------------------------------------------------------
+
+(1 row)
+
+INSERT INTO null_if_test SELECT i % 2000, i FROM generate_series(1, 5000) i;
+PREPARE prep_null_if (int) AS
+SELECT * FROM null_if_test WHERE i > NULLIF($1, 2);
+-- doesn't prune any chunk groups even in the first execution and
+-- returns 5000
+SELECT filtered_row_count('execute prep_null_if(3000);');
+ filtered_row_count
+---------------------------------------------------------------------
+               5000
+(1 row)
+
+drop table null_if_test;
