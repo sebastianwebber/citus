@@ -76,13 +76,13 @@ static Node * ColumnarScan_CreateCustomScanState(CustomScan *cscan);
 
 static void ColumnarScan_BeginCustomScan(CustomScanState *node, EState *estate, int
 										 eflags);
+static List * ExprListBindParams(List *exprList, ParamListInfo paramListInfo);
 static TupleTableSlot * ColumnarScan_ExecCustomScan(CustomScanState *node);
 static void ColumnarScan_EndCustomScan(CustomScanState *node);
 static void ColumnarScan_ReScanCustomScan(CustomScanState *node);
 static void ColumnarScan_ExplainCustomScan(CustomScanState *node, List *ancestors,
 										   ExplainState *es);
 
-static List * ExprListBindParams(List *node, ParamListInfo paramLI);
 
 /* saved hook value in case of unload */
 static set_rel_pathlist_hook_type PreviousSetRelPathlistHook = NULL;
@@ -370,10 +370,33 @@ ColumnarScan_BeginCustomScan(CustomScanState *cscanstate, EState *estate, int ef
 {
 	ColumnarScanState *columnarScanState = (ColumnarScanState *) cscanstate;
 
+	/*
+	 * To make chunk group filtering work with generic plans (i.e. prepared
+	 * statements), bind executor's extern params to the expressions given in
+	 * qual field.
+	 */
 	columnarScanState->qual = ExprListBindParams(columnarScanState->qual,
 												 estate->es_param_list_info);
 
 	/* scan slot is already initialized */
+}
+
+
+/*
+ * ExprListBindParams evaluates expressions given in exprList by using given
+ * params and returns a list of Const's for those expressions.
+ */
+static List *
+ExprListBindParams(List *exprList, ParamListInfo paramListInfo)
+{
+	/*
+	 * Wrap given param list in a PlannerInfo object to use
+	 * eval_const_expressions for binding them to given list of expressions.
+	 */
+	PlannerInfo *root = palloc0(sizeof(PlannerInfo));
+	root->glob = palloc0(sizeof(PlannerGlobal));
+	root->glob->boundParams = paramListInfo;
+	return castNode(List, eval_const_expressions(root, (Node *) exprList));
 }
 
 
@@ -535,113 +558,4 @@ ColumnarScan_ExplainCustomScan(CustomScanState *node, List *ancestors,
 		ExplainPropertyInteger("Columnar Chunk Groups Removed by Filter", NULL,
 							   chunkGroupsFiltered, es);
 	}
-}
-
-
-static Node *
-ExprListBindParams_mutator(Node *node, ParamListInfo paramLI)
-{
-	if (node == NULL)
-	{
-		return NULL;
-	}
-
-	/* copied from eval_const_expressions() */
-	if (IsA(node, Param))
-	{
-		Param *param = (Param *) node;
-
-		/* Look to see if we've been given a value for this Param */
-		if (param->paramkind == PARAM_EXTERN &&
-			paramLI != NULL &&
-			param->paramid > 0 &&
-			param->paramid <= paramLI->numParams)
-		{
-			ParamExternData *prm;
-			ParamExternData prmdata;
-
-			/*
-			 * Give hook a chance in case parameter is dynamic.  Tell
-			 * it that this fetch is speculative, so it should avoid
-			 * erroring out if parameter is unavailable.
-			 */
-			if (paramLI->paramFetch != NULL)
-			{
-				prm = paramLI->paramFetch(paramLI, param->paramid,
-										  true, &prmdata);
-			}
-			else
-			{
-				prm = &paramLI->params[param->paramid - 1];
-			}
-
-			/*
-			 * We don't just check OidIsValid, but insist that the
-			 * fetched type match the Param, just in case the hook did
-			 * something unexpected.  No need to throw an error here
-			 * though; leave that for runtime.
-			 */
-			if (OidIsValid(prm->ptype) &&
-				prm->ptype == param->paramtype)
-			{
-				/* OK to substitute parameter value? */
-				if (prm->pflags & PARAM_FLAG_CONST)
-				{
-					/*
-					 * Return a Const representing the param value.
-					 * Must copy pass-by-ref datatypes, since the
-					 * Param might be in a memory context
-					 * shorter-lived than our output plan should be.
-					 */
-					int16 typLen;
-					bool typByVal;
-					Datum pval;
-
-					get_typlenbyval(param->paramtype,
-									&typLen, &typByVal);
-					if (prm->isnull || typByVal)
-					{
-						pval = prm->value;
-					}
-					else
-					{
-						pval = datumCopy(prm->value, typByVal, typLen);
-					}
-					pval = datumCopy(prm->value, typByVal, typLen);
-					Const *con = makeConst(param->paramtype,
-										   param->paramtypmod,
-										   param->paramcollid,
-										   (int) typLen,
-										   pval,
-										   prm->isnull,
-										   typByVal);
-					con->location = param->location;
-					return (Node *) con;
-				}
-			}
-		}
-
-		/*
-		 * Not replaceable, so just copy the Param (no need to
-		 * recurse)
-		 */
-		return (Node *) copyObject(param);
-	}
-
-	return expression_tree_mutator(node, ExprListBindParams_mutator, (void *) paramLI);
-}
-
-
-/*
- * ExprListBindParams - take a List of Exprs, and replace Params with Consts
- * using paramLI, if able.
- *
- * The given node can be any type acceptable to expression_tree_mutator
- * (e.g. List); not just an Expr.
- */
-static List *
-ExprListBindParams(List *exprList, ParamListInfo paramLI)
-{
-	return (List *) expression_tree_mutator(
-		(Node *) exprList, ExprListBindParams_mutator, (void *) paramLI);
 }
