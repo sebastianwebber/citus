@@ -127,8 +127,9 @@ EXPLAIN (analyze on, costs off, timing off, summary off)
  Custom Scan (ColumnarScan) on simple_chunk_filtering (actual rows=111111 loops=1)
    Filter: (i > 123456)
    Rows Removed by Filter: 3457
+   Columnar Chunk Group Filters: (i > 123456)
    Columnar Chunk Groups Removed by Filter: 12
-(4 rows)
+(5 rows)
 
 SET columnar.enable_qual_pushdown = false;
 EXPLAIN (analyze on, costs off, timing off, summary off)
@@ -138,8 +139,7 @@ EXPLAIN (analyze on, costs off, timing off, summary off)
  Custom Scan (ColumnarScan) on simple_chunk_filtering (actual rows=111111 loops=1)
    Filter: (i > 123456)
    Rows Removed by Filter: 123457
-   Columnar Chunk Groups Removed by Filter: 0
-(4 rows)
+(3 rows)
 
 SET columnar.enable_qual_pushdown TO DEFAULT;
 -- https://github.com/citusdata/citus/issues/4555
@@ -153,8 +153,9 @@ EXPLAIN (analyze on, costs off, timing off, summary off)
  Custom Scan (ColumnarScan) on simple_chunk_filtering (actual rows=20000 loops=1)
    Filter: (i > 180000)
    Rows Removed by Filter: 1
+   Columnar Chunk Group Filters: (i > 180000)
    Columnar Chunk Groups Removed by Filter: 18
-(4 rows)
+(5 rows)
 
 DROP TABLE simple_chunk_filtering;
 CREATE TABLE multi_column_chunk_filtering(a int, b int) USING columnar;
@@ -167,8 +168,9 @@ EXPLAIN (analyze on, costs off, timing off, summary off)
    ->  Custom Scan (ColumnarScan) on multi_column_chunk_filtering (actual rows=184567 loops=1)
          Filter: (a > 50000)
          Rows Removed by Filter: 1
+         Columnar Chunk Group Filters: (a > 50000)
          Columnar Chunk Groups Removed by Filter: 5
-(5 rows)
+(6 rows)
 
 EXPLAIN (analyze on, costs off, timing off, summary off)
   SELECT count(*) FROM multi_column_chunk_filtering WHERE a > 50000 AND b > 50000;
@@ -178,8 +180,9 @@ EXPLAIN (analyze on, costs off, timing off, summary off)
    ->  Custom Scan (ColumnarScan) on multi_column_chunk_filtering (actual rows=184567 loops=1)
          Filter: ((a > 50000) AND (b > 50000))
          Rows Removed by Filter: 1
+         Columnar Chunk Group Filters: ((a > 50000) AND (b > 50000))
          Columnar Chunk Groups Removed by Filter: 5
-(5 rows)
+(6 rows)
 
 DROP TABLE multi_column_chunk_filtering;
 --
@@ -196,3 +199,88 @@ select filtered_row_count('select count(*) from part_table where id > 75000');
 (1 row)
 
 drop table part_table;
+-- test chunk group filtering through a join
+set enable_mergejoin=false;
+set enable_hashjoin=false;
+create table joinfilter(i int); -- row table
+insert into joinfilter values(45678);
+create table coltest(a int) using columnar;
+insert into coltest select generate_series(1,2000000);
+analyze joinfilter;
+analyze coltest;
+explain (analyze on, timing off, summary off, costs off)
+ select * from joinfilter, coltest where i = a;
+                             QUERY PLAN
+---------------------------------------------------------------------
+ Nested Loop (actual rows=1 loops=1)
+   ->  Seq Scan on joinfilter (actual rows=1 loops=1)
+   ->  Custom Scan (ColumnarScan) on coltest (actual rows=1 loops=1)
+         Filter: (joinfilter.i = a)
+         Rows Removed by Filter: 9999
+         Columnar Chunk Group Filters: (joinfilter.i = a)
+         Columnar Chunk Groups Removed by Filter: 199
+(7 rows)
+
+select * from joinfilter, coltest where i = a;
+   i   |   a
+---------------------------------------------------------------------
+ 45678 | 45678
+(1 row)
+
+set enable_mergejoin to default;
+set enable_hashjoin to default;
+--
+-- https://github.com/citusdata/citus/issues/4488
+--
+create table columnar_prepared_stmt (x int, y int) using columnar;
+insert into columnar_prepared_stmt select s, s from generate_series(1,5000000) s;
+prepare foo (int) as select x from columnar_prepared_stmt where x = $1;
+execute foo(3);
+ x
+---------------------------------------------------------------------
+ 3
+(1 row)
+
+execute foo(3);
+ x
+---------------------------------------------------------------------
+ 3
+(1 row)
+
+execute foo(3);
+ x
+---------------------------------------------------------------------
+ 3
+(1 row)
+
+execute foo(3);
+ x
+---------------------------------------------------------------------
+ 3
+(1 row)
+
+select filtered_row_count('execute foo(3)');
+ filtered_row_count
+---------------------------------------------------------------------
+               9999
+(1 row)
+
+select filtered_row_count('execute foo(3)');
+ filtered_row_count
+---------------------------------------------------------------------
+               9999
+(1 row)
+
+select filtered_row_count('execute foo(3)');
+ filtered_row_count
+---------------------------------------------------------------------
+               9999
+(1 row)
+
+select filtered_row_count('execute foo(3)');
+ filtered_row_count
+---------------------------------------------------------------------
+               9999
+(1 row)
+
+drop table columnar_prepared_stmt;

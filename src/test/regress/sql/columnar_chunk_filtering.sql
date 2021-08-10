@@ -111,3 +111,37 @@ create table part_2_columnar partition of part_table for values from (0) to (150
 insert into part_table select generate_series(1,159999);
 select filtered_row_count('select count(*) from part_table where id > 75000');
 drop table part_table;
+
+-- test chunk group filtering through a join
+
+set enable_mergejoin=false;
+set enable_hashjoin=false;
+
+create table joinfilter(i int); -- row table
+insert into joinfilter values(45678);
+create table coltest(a int) using columnar;
+insert into coltest select generate_series(1,2000000);
+analyze joinfilter;
+analyze coltest;
+explain (analyze on, timing off, summary off, costs off)
+ select * from joinfilter, coltest where i = a;
+select * from joinfilter, coltest where i = a;
+
+set enable_mergejoin to default;
+set enable_hashjoin to default;
+
+--
+-- https://github.com/citusdata/citus/issues/4488
+--
+create table columnar_prepared_stmt (x int, y int) using columnar;
+insert into columnar_prepared_stmt select s, s from generate_series(1,5000000) s;
+prepare foo (int) as select x from columnar_prepared_stmt where x = $1;
+execute foo(3);
+execute foo(3);
+execute foo(3);
+execute foo(3);
+select filtered_row_count('execute foo(3)');
+select filtered_row_count('execute foo(3)');
+select filtered_row_count('execute foo(3)');
+select filtered_row_count('execute foo(3)');
+drop table columnar_prepared_stmt;

@@ -27,10 +27,10 @@ WHERE things.id > 299990;
 ---------------------------------------------------------------------
  Aggregate
    ->  Nested Loop
-         Join Filter: (users.id = things.user_id)
          ->  Custom Scan (ColumnarScan) on things
                Filter: (id > 299990)
          ->  Custom Scan (ColumnarScan) on users
+               Filter: (things.user_id = id)
 (6 rows)
 
 SET client_min_messages TO warning;

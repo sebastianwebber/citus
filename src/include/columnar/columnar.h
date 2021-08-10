@@ -216,7 +216,7 @@ extern ColumnarReadState * ColumnarBeginRead(Relation relation,
 											 MemoryContext scanContext);
 extern bool ColumnarReadNextRow(ColumnarReadState *state, Datum *columnValues,
 								bool *columnNulls, uint64 *rowNumber);
-extern void ColumnarRescan(ColumnarReadState *readState);
+extern void ColumnarRescan(ColumnarReadState *readState, List *scanQual);
 extern bool ColumnarReadRowByRowNumber(ColumnarReadState *readState,
 									   uint64 rowNumber, Datum *columnValues,
 									   bool *columnNulls, Snapshot snapshot);
