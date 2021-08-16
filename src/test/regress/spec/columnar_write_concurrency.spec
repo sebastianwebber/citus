@@ -56,8 +56,8 @@ step "s1-verify-metadata"
       -- verify that table has two stripes ..
       count(*) = 2 AND
       -- .. and those stripes look like:
-      sum(case when stripe_num = 1 AND first_row_number = 150001 AND row_count = 3 then 1 end) = 1 AND
-      sum(case when stripe_num = 2 AND first_row_number = 1 AND row_count = 10000 then 1 end) = 1
+      sum(case when stripe_num = 2 AND first_row_number = 150001 AND row_count = 3 then 1 end) = 1 AND
+      sum(case when stripe_num = 1 AND first_row_number = 1 AND row_count = 10000 then 1 end) = 1
       AS stripe_metadata_for_test_insert_concurrency_ok
     FROM test_insert_concurrency_stripes;
 }
@@ -105,8 +105,8 @@ permutation "s1-begin" "s2-begin" "s2-insert" "s1-copy" "s1-select" "s2-select" 
 
 # insert vs insert
 # Start inserting rows in session 1, reserve first_row_number to be 1 for session 1 but commit session 2 before session 1.
-# Then verify that while the stripe written by session 2 has the greater first_row_number, stripe written by session 1 has
-# the greater stripe_num. This is because, we reserve stripe_num and first_row_number at different times.
+# Then verify that stripe written by session 2 has greater first_row_number and stripe_num than the stripe written by
+# session 1. This is because, we reserve stripe_num and first_row_number at the same time.
 permutation "s1-truncate" "s1-begin" "s1-insert-10000-rows" "s2-begin" "s2-insert" "s2-commit" "s1-commit" "s1-verify-metadata"
 
 permutation "s1-begin" "s2-begin-repeatable" "s1-insert" "s2-insert" "s2-select" "s1-commit" "s2-select" "s2-commit"

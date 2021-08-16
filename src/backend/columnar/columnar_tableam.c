@@ -528,10 +528,37 @@ columnar_index_fetch_tuple(struct IndexFetchTableData *sscan,
 	}
 
 	uint64 rowNumber = tid_to_row_number(*tid);
-	if (!ColumnarReadRowByRowNumber(scan->cs_readState, rowNumber, slot->tts_values,
-									slot->tts_isnull))
+	StripeMetadata *stripeMetadata =
+		FindStripeWithMatchingFirstRowNumber(columnarRelation, rowNumber, snapshot);
+	if (!stripeMetadata)
 	{
+		/* it is certain that tuple with rowNumber doesn't exist */
 		return false;
+	}
+
+	if (StripeIsFlushed(stripeMetadata) &&
+		!ColumnarReadRowByRowNumber(scan->cs_readState, rowNumber,
+									slot->tts_values, slot->tts_isnull))
+	{
+		/*
+		 * FindStripeWithMatchingFirstRowNumber doesn't verify upper row
+		 * number boundary of found stripe. For this reason, we didn't
+		 * certainly know if given row number belongs to one of the stripes.
+		 */
+		return false;
+	}
+
+	if (!StripeIsFlushed(stripeMetadata))
+	{
+		/*
+		 * Stripe that "might" contain the tuple with rowNumber is not
+		 * flushed yet. Here we set all attributes of given tupleslot to NULL
+		 * before returning true and expect the indexAM callback that called
+		 * us --possibly to check against constraint violation-- blocks until
+		 * writer transaction commits or aborts, without requiring us to fill
+		 * the tupleslot properly.
+		 */
+		memset(slot->tts_isnull, true, slot->tts_nvalid);
 	}
 
 	slot->tts_tableOid = RelationGetRelid(columnarRelation);
@@ -1374,7 +1401,8 @@ ColumnarGetHighestItemPointer(Relation relation, Snapshot snapshot)
 {
 	StripeMetadata *stripeWithHighestRowNumber =
 		FindStripeWithHighestRowNumber(relation, snapshot);
-	if (stripeWithHighestRowNumber == NULL)
+	if (stripeWithHighestRowNumber == NULL ||
+		StripeGetHighestRowNumber(stripeWithHighestRowNumber) == 0)
 	{
 		/* table is empty according to our snapshot */
 		ItemPointerData invalidItemPtr;
