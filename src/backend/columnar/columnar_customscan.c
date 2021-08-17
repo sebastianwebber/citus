@@ -74,7 +74,7 @@ static void AddColumnarScanPaths(PlannerInfo *root, RelOptInfo *rel,
 static void AddColumnarScanPathsRec(PlannerInfo *root, RelOptInfo *rel,
 									RangeTblEntry *rte, Relids paramRelids,
 									Relids candidateRelids,
-									int depth);
+									int depthLimit);
 static void AddColumnarScanPath(PlannerInfo *root, RelOptInfo *rel,
 								RangeTblEntry *rte, Relids required_relids);
 static Cost ColumnarScanCost(RelOptInfo *rel, Oid relationId, int numberOfColumnsRead, int
@@ -597,6 +597,14 @@ FilterPushdownClauses(RelOptInfo *rel, List *inputClauses)
 }
 
 
+static bool
+PushdownJoinClauseMatches(PlannerInfo *root, RelOptInfo *rel,
+						  EquivalenceClass *ec, EquivalenceMember *em,
+						  void *arg)
+{
+	return true;
+}
+
 /*
  * FindPushdownJoinClauses finds join clauses, including those implied by ECs,
  * that may be pushed down.
@@ -604,12 +612,15 @@ FilterPushdownClauses(RelOptInfo *rel, List *inputClauses)
 static List *
 FindPushdownJoinClauses(PlannerInfo *root, RelOptInfo *rel)
 {
-	Relids joinRelids = bms_union(root->all_baserels, rel->relids);
-	Relids outerRelids = bms_difference(root->all_baserels, rel->relids);
-
 	List *joinClauses = copyObject(rel->joininfo);
-	List *ecClauses = generate_join_implied_equalities(
-		root, joinRelids, outerRelids, rel);
+
+	/*
+	 * XXX: Here we are generating the clauses just so we can later extract
+	 * the interesting relids. This can probably be made more efficient.
+	 */
+	List *ecClauses = generate_implied_equalities_for_column(
+		root, rel, PushdownJoinClauseMatches, NULL,
+		rel->lateral_referencers);
 	List *allClauses = list_concat(joinClauses, ecClauses);
 
 	return FilterPushdownClauses(rel, allClauses);
