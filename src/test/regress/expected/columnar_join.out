@@ -23,15 +23,14 @@ SELECT count(*)
 FROM users
 JOIN things ON (users.id = things.user_id)
 WHERE things.id > 299990;
-                    QUERY PLAN
+                           QUERY PLAN
 ---------------------------------------------------------------------
  Aggregate
    ->  Nested Loop
-         ->  Custom Scan (ColumnarScan) on things
-               Filter: (id > 299990)
          ->  Custom Scan (ColumnarScan) on users
-               Filter: (things.user_id = id)
-(6 rows)
+         ->  Custom Scan (ColumnarScan) on things
+               Filter: ((id > 299990) AND (users.id = user_id))
+(5 rows)
 
 SET client_min_messages TO warning;
 DROP SCHEMA am_columnar_join CASCADE;

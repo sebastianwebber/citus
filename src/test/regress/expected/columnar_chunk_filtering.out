@@ -199,33 +199,133 @@ select filtered_row_count('select count(*) from part_table where id > 75000');
 (1 row)
 
 drop table part_table;
--- test chunk group filtering through a join
+-- test join parameterization
+set columnar.stripe_row_limit = 2000;
+set columnar.chunk_group_row_limit = 1000;
+create table r1(id1 int, n1 int); -- row
+create table r2(id2 int, n2 int); -- row
+create table r3(id3 int, n3 int); -- row
+create table coltest(id int, x1 int, x2 int, x3 int) using columnar;
+set columnar.stripe_row_limit to default;
+set columnar.chunk_group_row_limit to default;
+insert into r1 values(1234, 12350);
+insert into r1 values(4567, 45000);
+insert into r1 values(9101, 176000);
+insert into r1 values(14202, 7);
+insert into r1 values(18942, 189430);
+insert into r2 values(1234, 123502);
+insert into r2 values(4567, 450002);
+insert into r2 values(9101, 1760002);
+insert into r2 values(14202, 72);
+insert into r2 values(18942, 1894302);
+insert into r3 values(1234, 1235075);
+insert into r3 values(4567, 4500075);
+insert into r3 values(9101, 17600075);
+insert into r3 values(14202, 775);
+insert into r3 values(18942, 18943075);
+insert into coltest
+  select g, g*10, g*100, g*1000 from generate_series(0, 19999) g;
+ANALYZE r1, r2, r3, coltest;
+-- force nested loop
 set enable_mergejoin=false;
 set enable_hashjoin=false;
-create table joinfilter(i int); -- row table
-insert into joinfilter values(45678);
-create table coltest(a int) using columnar;
-insert into coltest select generate_series(1,2000000);
-analyze joinfilter;
-analyze coltest;
-explain (analyze on, timing off, summary off, costs off)
- select * from joinfilter, coltest where i = a;
+-- test different kinds of expressions
+EXPLAIN (analyze on, costs off, timing off, summary off)
+SELECT * FROM r1, coltest WHERE
+  id1 = id AND x1 > 15000 AND x1::text > '000000' AND n1 % 10 = 0;
+                                     QUERY PLAN
+---------------------------------------------------------------------
+ Nested Loop (actual rows=3 loops=1)
+   ->  Seq Scan on r1 (actual rows=4 loops=1)
+         Filter: ((n1 % 10) = 0)
+         Rows Removed by Filter: 1
+   ->  Custom Scan (ColumnarScan) on coltest (actual rows=1 loops=4)
+         Filter: ((x1 > 15000) AND (r1.id1 = id) AND ((x1)::text > '000000'::text))
+         Rows Removed by Filter: 999
+         Columnar Chunk Group Filters: ((x1 > 15000) AND (r1.id1 = id))
+         Columnar Chunk Groups Removed by Filter: 19
+(9 rows)
+
+SELECT * FROM r1, coltest WHERE
+  id1 = id AND x1 > 15000 AND x1::text > '000000' AND n1 % 10 = 0;
+  id1  |   n1   |  id   |   x1   |   x2    |    x3
+---------------------------------------------------------------------
+  4567 |  45000 |  4567 |  45670 |  456700 |  4567000
+  9101 | 176000 |  9101 |  91010 |  910100 |  9101000
+ 18942 | 189430 | 18942 | 189420 | 1894200 | 18942000
+(3 rows)
+
+-- test equivalence classes
+EXPLAIN (analyze on, costs off, timing off, summary off)
+SELECT * FROM r1, r2, r3, coltest WHERE
+  id1 = id2 AND id2 = id3 AND id3 = id;
                              QUERY PLAN
 ---------------------------------------------------------------------
- Nested Loop (actual rows=1 loops=1)
-   ->  Seq Scan on joinfilter (actual rows=1 loops=1)
-   ->  Custom Scan (ColumnarScan) on coltest (actual rows=1 loops=1)
-         Filter: (joinfilter.i = a)
-         Rows Removed by Filter: 9999
-         Columnar Chunk Group Filters: (joinfilter.i = a)
-         Columnar Chunk Groups Removed by Filter: 199
-(7 rows)
+ Nested Loop (actual rows=5 loops=1)
+   ->  Nested Loop (actual rows=5 loops=1)
+         Join Filter: (r1.id1 = r3.id3)
+         Rows Removed by Join Filter: 20
+         ->  Nested Loop (actual rows=5 loops=1)
+               Join Filter: (r1.id1 = r2.id2)
+               Rows Removed by Join Filter: 20
+               ->  Seq Scan on r1 (actual rows=5 loops=1)
+               ->  Materialize (actual rows=5 loops=5)
+                     ->  Seq Scan on r2 (actual rows=5 loops=1)
+         ->  Materialize (actual rows=5 loops=5)
+               ->  Seq Scan on r3 (actual rows=5 loops=1)
+   ->  Custom Scan (ColumnarScan) on coltest (actual rows=1 loops=5)
+         Filter: (r1.id1 = id)
+         Rows Removed by Filter: 999
+         Columnar Chunk Group Filters: (r1.id1 = id)
+         Columnar Chunk Groups Removed by Filter: 19
+(17 rows)
 
-select * from joinfilter, coltest where i = a;
-   i   |   a
+SELECT * FROM r1, r2, r3, coltest WHERE
+  id1 = id2 AND id2 = id3 AND id3 = id;
+  id1  |   n1   |  id2  |   n2    |  id3  |    n3    |  id   |   x1   |   x2    |    x3
 ---------------------------------------------------------------------
- 45678 | 45678
-(1 row)
+  1234 |  12350 |  1234 |  123502 |  1234 |  1235075 |  1234 |  12340 |  123400 |  1234000
+  4567 |  45000 |  4567 |  450002 |  4567 |  4500075 |  4567 |  45670 |  456700 |  4567000
+  9101 | 176000 |  9101 | 1760002 |  9101 | 17600075 |  9101 |  91010 |  910100 |  9101000
+ 14202 |      7 | 14202 |      72 | 14202 |      775 | 14202 | 142020 | 1420200 | 14202000
+ 18942 | 189430 | 18942 | 1894302 | 18942 | 18943075 | 18942 | 189420 | 1894200 | 18942000
+(5 rows)
+
+-- test more complex parameterization
+EXPLAIN (analyze on, costs off, timing off, summary off)
+SELECT * FROM r1, r2, r3, coltest WHERE
+  id1 = id2 AND id2 = id3 AND id3 = id AND
+  n1 > x1 AND n2 > x2 AND n3 > x3;
+                                                QUERY PLAN
+---------------------------------------------------------------------
+ Nested Loop (actual rows=3 loops=1)
+   ->  Nested Loop (actual rows=5 loops=1)
+         Join Filter: (r1.id1 = r3.id3)
+         Rows Removed by Join Filter: 20
+         ->  Nested Loop (actual rows=5 loops=1)
+               Join Filter: (r1.id1 = r2.id2)
+               Rows Removed by Join Filter: 20
+               ->  Seq Scan on r1 (actual rows=5 loops=1)
+               ->  Materialize (actual rows=5 loops=5)
+                     ->  Seq Scan on r2 (actual rows=5 loops=1)
+         ->  Materialize (actual rows=5 loops=5)
+               ->  Seq Scan on r3 (actual rows=5 loops=1)
+   ->  Custom Scan (ColumnarScan) on coltest (actual rows=1 loops=5)
+         Filter: ((r1.n1 > x1) AND (r2.n2 > x2) AND (r3.n3 > x3) AND (r1.id1 = id))
+         Rows Removed by Filter: 799
+         Columnar Chunk Group Filters: ((r1.n1 > x1) AND (r2.n2 > x2) AND (r3.n3 > x3) AND (r1.id1 = id))
+         Columnar Chunk Groups Removed by Filter: 19
+(17 rows)
+
+SELECT * FROM r1, r2, r3, coltest WHERE
+  id1 = id2 AND id2 = id3 AND id3 = id AND
+  n1 > x1 AND n2 > x2 AND n3 > x3;
+  id1  |   n1   |  id2  |   n2    |  id3  |    n3    |  id   |   x1   |   x2    |    x3
+---------------------------------------------------------------------
+  1234 |  12350 |  1234 |  123502 |  1234 |  1235075 |  1234 |  12340 |  123400 |  1234000
+  9101 | 176000 |  9101 | 1760002 |  9101 | 17600075 |  9101 |  91010 |  910100 |  9101000
+ 18942 | 189430 | 18942 | 1894302 | 18942 | 18943075 | 18942 | 189420 | 1894200 | 18942000
+(3 rows)
 
 set enable_mergejoin to default;
 set enable_hashjoin to default;

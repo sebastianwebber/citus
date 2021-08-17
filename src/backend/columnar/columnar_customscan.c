@@ -605,6 +605,7 @@ PushdownJoinClauseMatches(PlannerInfo *root, RelOptInfo *rel,
 	return true;
 }
 
+
 /*
  * FindPushdownJoinClauses finds join clauses, including those implied by ECs,
  * that may be pushed down.
@@ -709,6 +710,11 @@ AddColumnarScanPaths(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 	else
 	{
 		depthLimit = 1; /* 1 level; <= nCandidates + 1 paths */
+	}
+
+	if (!EnableColumnarQualPushdown)
+	{
+		depthLimit = 0;
 	}
 
 	/* must always parameterize by lateral refs */
@@ -824,7 +830,11 @@ AddColumnarScanPath(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte,
 	 * construct the CustomScan plan.
 	 */
 	List *pushdownClauses = FilterPushdownClauses(rel, allClauses);
-	cpath->custom_private = extract_actual_clauses(pushdownClauses, false);
+
+	if (EnableColumnarQualPushdown)
+	{
+		cpath->custom_private = extract_actual_clauses(pushdownClauses, false);
+	}
 
 	/*
 	 * Add cost estimates for a columnar table scan, row count is the rows estimated by
@@ -854,11 +864,11 @@ ColumnarScanCost(RelOptInfo *rel, Oid relationId, int numberOfColumnsRead, int n
 	/*
 	 * XXX: we don't currently have a good way of estimating the selectivity
 	 * of the clauses for chunk group filtering. For now, just assume the
-	 * selectivity of each clause is 0.75. In the future, we can use
+	 * selectivity of each clause is 0.50. In the future, we can use
 	 * correlation statistics or even just read the metadata directly (though
 	 * the join clauses will have Params and be harder to estimate).
 	 */
-	stripesToRead *= pow(0.75, nClauses);
+	stripesToRead *= pow(0.50, nClauses);
 
 	return stripesToRead *
 		   ColumnarPerStripeScanCost(rel, relationId, numberOfColumnsRead);

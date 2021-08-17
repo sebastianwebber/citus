@@ -112,20 +112,71 @@ insert into part_table select generate_series(1,159999);
 select filtered_row_count('select count(*) from part_table where id > 75000');
 drop table part_table;
 
--- test chunk group filtering through a join
+-- test join parameterization
 
+set columnar.stripe_row_limit = 2000;
+set columnar.chunk_group_row_limit = 1000;
+
+create table r1(id1 int, n1 int); -- row
+create table r2(id2 int, n2 int); -- row
+create table r3(id3 int, n3 int); -- row
+
+create table coltest(id int, x1 int, x2 int, x3 int) using columnar;
+
+set columnar.stripe_row_limit to default;
+set columnar.chunk_group_row_limit to default;
+
+insert into r1 values(1234, 12350);
+insert into r1 values(4567, 45000);
+insert into r1 values(9101, 176000);
+insert into r1 values(14202, 7);
+insert into r1 values(18942, 189430);
+
+insert into r2 values(1234, 123502);
+insert into r2 values(4567, 450002);
+insert into r2 values(9101, 1760002);
+insert into r2 values(14202, 72);
+insert into r2 values(18942, 1894302);
+
+insert into r3 values(1234, 1235075);
+insert into r3 values(4567, 4500075);
+insert into r3 values(9101, 17600075);
+insert into r3 values(14202, 775);
+insert into r3 values(18942, 18943075);
+
+insert into coltest
+  select g, g*10, g*100, g*1000 from generate_series(0, 19999) g;
+
+ANALYZE r1, r2, r3, coltest;
+
+-- force nested loop
 set enable_mergejoin=false;
 set enable_hashjoin=false;
 
-create table joinfilter(i int); -- row table
-insert into joinfilter values(45678);
-create table coltest(a int) using columnar;
-insert into coltest select generate_series(1,2000000);
-analyze joinfilter;
-analyze coltest;
-explain (analyze on, timing off, summary off, costs off)
- select * from joinfilter, coltest where i = a;
-select * from joinfilter, coltest where i = a;
+-- test different kinds of expressions
+EXPLAIN (analyze on, costs off, timing off, summary off)
+SELECT * FROM r1, coltest WHERE
+  id1 = id AND x1 > 15000 AND x1::text > '000000' AND n1 % 10 = 0;
+SELECT * FROM r1, coltest WHERE
+  id1 = id AND x1 > 15000 AND x1::text > '000000' AND n1 % 10 = 0;
+
+-- test equivalence classes
+
+EXPLAIN (analyze on, costs off, timing off, summary off)
+SELECT * FROM r1, r2, r3, coltest WHERE
+  id1 = id2 AND id2 = id3 AND id3 = id;
+SELECT * FROM r1, r2, r3, coltest WHERE
+  id1 = id2 AND id2 = id3 AND id3 = id;
+
+-- test more complex parameterization
+
+EXPLAIN (analyze on, costs off, timing off, summary off)
+SELECT * FROM r1, r2, r3, coltest WHERE
+  id1 = id2 AND id2 = id3 AND id3 = id AND
+  n1 > x1 AND n2 > x2 AND n3 > x3;
+SELECT * FROM r1, r2, r3, coltest WHERE
+  id1 = id2 AND id2 = id3 AND id3 = id AND
+  n1 > x1 AND n2 > x2 AND n3 > x3;
 
 set enable_mergejoin to default;
 set enable_hashjoin to default;

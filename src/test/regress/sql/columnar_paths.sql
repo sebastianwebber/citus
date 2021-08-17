@@ -6,6 +6,11 @@ INSERT INTO full_correlated SELECT i, i::text FROM generate_series(1, 1000000) i
 CREATE INDEX full_correlated_btree ON full_correlated (a);
 ANALYZE full_correlated;
 
+-- Prevent qual pushdown from competing with index scans. This test
+-- file tests paths other than qual pushdown; those are tested in
+-- columnar_chunk_filtering.sql.
+SET columnar.enable_qual_pushdown = false;
+
 SELECT columnar_test_helpers.uses_index_scan (
 $$
 SELECT a FROM full_correlated WHERE a=200;
@@ -336,6 +341,8 @@ BEGIN;
   $$
   );
 ROLLBACK;
+
+SET columnar.enable_qual_pushdown TO DEFAULT;
 
 SET client_min_messages TO WARNING;
 DROP SCHEMA columnar_paths CASCADE;
