@@ -604,12 +604,12 @@ FilterPushdownClauses(RelOptInfo *rel, List *inputClauses)
 static List *
 FindPushdownJoinClauses(PlannerInfo *root, RelOptInfo *rel)
 {
-	Relids allRelids = bms_copy(root->all_baserels);
-	Relids joinRelids = bms_del_member(bms_copy(allRelids), rel->relid);
+	Relids joinRelids = bms_union(root->all_baserels, rel->relids);
+	Relids outerRelids = bms_difference(root->all_baserels, rel->relids);
 
 	List *joinClauses = copyObject(rel->joininfo);
 	List *ecClauses = generate_join_implied_equalities(
-		root, allRelids, joinRelids, rel);
+		root, joinRelids, outerRelids, rel);
 	List *allClauses = list_concat(joinClauses, ecClauses);
 
 	return FilterPushdownClauses(rel, allClauses);
@@ -629,25 +629,27 @@ FindCandidateRelids(PlannerInfo *root, RelOptInfo *rel, List *joinClauses)
 {
 	Relids candidateRelids = NULL;
 
+	/*
+	 * XXX: Parameterizing for partitions is more complex because the
+	 * required_outers need to match up (see add_paths_to_append_rel()). Also,
+	 * if there are many columnar partitions, that could result in a lot of
+	 * paths being considered.
+	 */
+	if (rel->reloptkind == RELOPT_OTHER_MEMBER_REL)
+	{
+		return NULL;
+	}
+
 	ListCell *lc;
 	foreach(lc, joinClauses)
 	{
 		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
 
-		int otherRelid = -1;
-		while ((otherRelid =
-					bms_next_member(rinfo->required_relids, otherRelid)) >= 0)
-		{
-			RelOptInfo *other = find_base_rel(root, otherRelid);
-
-			/* don't try to parameterize by a parent of the given rel */
-			if (rel->relid != otherRelid)
-			{
-				candidateRelids = bms_add_member(candidateRelids, otherRelid);
-			}
-		}
+		candidateRelids = bms_add_members(candidateRelids,
+										  rinfo->required_relids);
 	}
 
+	candidateRelids = bms_del_member(candidateRelids, rel->relid);
 	return candidateRelids;
 }
 
@@ -1228,7 +1230,7 @@ ColumnarScan_ExplainCustomScan(CustomScanState *node, List *ancestors,
 
 #if PG_VERSION_NUM >= 130000
 			List *context = set_deparse_context_plan(es->deparse_cxt,
-													 cscan->scan.plan,
+													 &cscan->scan.plan,
 													 ancestors);
 #else
 			PlanState *planstate = &node->ss.ps;
