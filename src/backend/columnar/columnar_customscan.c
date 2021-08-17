@@ -640,18 +640,6 @@ static Relids
 FindCandidateRelids(PlannerInfo *root, RelOptInfo *rel, List *joinClauses)
 {
 	Relids candidateRelids = NULL;
-
-	/*
-	 * XXX: Parameterizing for partitions is more complex because the
-	 * required_outers need to match up (see add_paths_to_append_rel()). Also,
-	 * if there are many columnar partitions, that could result in a lot of
-	 * paths being considered.
-	 */
-	if (rel->reloptkind == RELOPT_OTHER_MEMBER_REL)
-	{
-		return NULL;
-	}
-
 	ListCell *lc;
 	foreach(lc, joinClauses)
 	{
@@ -1012,7 +1000,6 @@ EvalParamsMutator(Node *node, ExprContext *econtext)
 		Param *param = (Param *) node;
 		int16 typLen;
 		bool typByVal;
-		Datum pval;
 		bool isnull;
 
 		get_typlenbyval(param->paramtype, &typLen, &typByVal);
@@ -1020,7 +1007,7 @@ EvalParamsMutator(Node *node, ExprContext *econtext)
 		/* XXX: should save ExprState for efficiency */
 		ExprState *exprState = ExecInitExprWithParams((Expr *) node,
 													  econtext->ecxt_param_list_info);
-		pval = ExecEvalExpr(exprState, econtext, &isnull);
+		Datum pval = ExecEvalExpr(exprState, econtext, &isnull);
 
 		return (Node *) makeConst(param->paramtype,
 								  param->paramtypmod,

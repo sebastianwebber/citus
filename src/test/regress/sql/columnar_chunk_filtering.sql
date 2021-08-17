@@ -122,6 +122,13 @@ create table r2(id2 int, n2 int); -- row
 create table r3(id3 int, n3 int); -- row
 
 create table coltest(id int, x1 int, x2 int, x3 int) using columnar;
+create table coltest_part(id int, x1 int, x2 int, x3 int)
+  partition by range (id);
+create table coltest_part0
+  partition of coltest_part for values from (0) to (10000)
+  using columnar;
+create table coltest_part1
+  partition of coltest_part for values from (10000) to (20000); -- row
 
 set columnar.stripe_row_limit to default;
 set columnar.chunk_group_row_limit to default;
@@ -146,12 +153,15 @@ insert into r3 values(18942, 18943075);
 
 insert into coltest
   select g, g*10, g*100, g*1000 from generate_series(0, 19999) g;
+insert into coltest_part
+  select g, g*10, g*100, g*1000 from generate_series(0, 19999) g;
 
-ANALYZE r1, r2, r3, coltest;
+ANALYZE r1, r2, r3, coltest, coltest_part;
 
 -- force nested loop
 set enable_mergejoin=false;
 set enable_hashjoin=false;
+set enable_material=false;
 
 -- test different kinds of expressions
 EXPLAIN (analyze on, costs off, timing off, summary off)
@@ -178,8 +188,16 @@ SELECT * FROM r1, r2, r3, coltest WHERE
   id1 = id2 AND id2 = id3 AND id3 = id AND
   n1 > x1 AND n2 > x2 AND n3 > x3;
 
+-- test partitioning parameterization
+EXPLAIN (analyze on, costs off, timing off, summary off)
+SELECT * FROM r1, coltest_part WHERE
+  id1 = id AND n1 > x1;
+SELECT * FROM r1, coltest_part WHERE
+  id1 = id AND n1 > x1;
+
 set enable_mergejoin to default;
 set enable_hashjoin to default;
+set enable_material to default;
 
 --
 -- https://github.com/citusdata/citus/issues/4488
