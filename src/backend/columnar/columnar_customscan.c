@@ -748,17 +748,20 @@ AddColumnarScanPathsRec(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte,
 		return;
 	}
 
+	Relids tmpCandidateRelids = bms_copy(candidateRelids);
 	int relid = -1;
 	while ((relid = bms_next_member(candidateRelids, relid)) >= 0)
 	{
 		Relids tmpParamRelids = bms_add_member(
 			bms_copy(paramRelids), relid);
-		Relids tmpCandidateRelids = bms_del_member(
-			bms_copy(candidateRelids), relid);
+
+		tmpCandidateRelids = bms_del_member(tmpCandidateRelids, relid);
 
 		AddColumnarScanPathsRec(root, rel, rte, tmpParamRelids,
 								tmpCandidateRelids, depthLimit);
 	}
+
+	bms_free(tmpCandidateRelids);
 }
 
 
