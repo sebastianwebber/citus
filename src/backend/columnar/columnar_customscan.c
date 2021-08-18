@@ -668,34 +668,39 @@ FindCandidateRelids(PlannerInfo *root, RelOptInfo *rel, List *joinClauses)
 
 
 /*
- * combinations() calculates the number of combinations of n things taken k at
- * a time. Intended for small numbers. If it overflows to inf, that's OK (but
- * be careful with the calculation to not divide by 0 or inf).
+ * Combinations() calculates the number of combinations of n things taken k at
+ * a time. When the correct result is large, the calculation may produce a
+ * non-integer result, or overflow to inf, which caller should handle
+ * appropriately.
+ *
+ * Use the following two formulae from Knuth TAoCP, 1.2.6:
+ *    (2) Combinations(n, k) = (n*(n-1)..(n-k+1)) / (k*(k-1)..1)
+ *    (5) Combinations(n, k) = Combinations(n, n-k)
  */
 static double
-combinations(int n, int k)
+Combinations(int n, int k)
 {
-	/*
-	 * combinations(n,k) = n!/(k! * (n-k)!)
-	 *
-	 * = (n * (n-1) * ... * (b+1)) / (2 * 3 * ... * a)
-	 *    where a = min(k, n-k) and b = max(k, n-k)
-	 */
-	Assert(n >= k);
-
-	int a = Min(k, n - k);
-	int b = Max(k, n - k);
-
 	double v = 1;
 
-	/* numerator: n * (n-1) ... * (b+1) */
-	for (int i = n; i > b; i--)
+	/*
+	 * If k is close to n, then both the numerator and the denominator are
+	 * close to n!, and we may overflow even if the input is reasonable
+	 * (e.g. Combinations(500, 500)). Use formula (5) to choose the smaller,
+	 * but equivalent, k.
+	 */
+	k = Min(k, n - k);
+
+	/* calculate numerator of formula (2) first */
+	for (int i = n; i >= n - k + 1; i--)
 	{
 		v *= i;
 	}
 
-	/* denominator: 2 * 3 * ... * a */
-	for (int i = 2; i <= a; i++)
+	/*
+	 * Divide by each factor in the denominator of formula (2), skipping
+	 * division by 1.
+	 */
+	for (int i = k; i >= 2 ; i--)
 	{
 		v /= i;
 	}
@@ -710,8 +715,8 @@ combinations(int n, int k)
  *
  * The maximum number of paths generated for a given depthLimit is:
  *
- *    combinations(nCandidates, 0) + combinations(nCandidates, 1) + ... +
- *    combinations(nCandidates, depthLimit)
+ *    Combinations(nCandidates, 0) + Combinations(nCandidates, 1) + ... +
+ *    Combinations(nCandidates, depthLimit)
  *
  * There's no closed formula for a partial sum of combinations, so just keep
  * increasing the depth until the number of combinations exceeds the limit.
@@ -729,7 +734,7 @@ ChooseDepthLimit(int nCandidates)
 
 	while (depth < nCandidates)
 	{
-		numPaths += combinations(nCandidates, depth + 1);
+		numPaths += Combinations(nCandidates, depth + 1);
 
 		if (numPaths > (double) ColumnarMaxCustomScanPaths)
 		{
