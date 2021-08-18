@@ -77,7 +77,8 @@ static void AddColumnarScanPathsRec(PlannerInfo *root, RelOptInfo *rel,
 									int depthLimit);
 static void AddColumnarScanPath(PlannerInfo *root, RelOptInfo *rel,
 								RangeTblEntry *rte, Relids required_relids);
-static void CostColumnarScan(CustomPath *cpath, RelOptInfo *rel, Oid relationId,
+static void CostColumnarScan(CustomPath *cpath, PlannerInfo *root,
+							 RelOptInfo *rel, Oid relationId,
 							 int numberOfColumnsRead, int nClauses);
 static Cost ColumnarPerStripeScanCost(RelOptInfo *rel, Oid relationId,
 									  int numberOfColumnsRead);
@@ -585,6 +586,12 @@ CheckPushdownClause(RelOptInfo *rel, Expr *clause)
 /*
  * FilterPushdownClauses filters for clauses that are candidates for pushing
  * down into rel.
+ *
+ * XXX: the only clauses likely to be useful are either equality clauses or
+ * clauses that reference a correlated column. Should we filter out
+ * inequalities on uncorrelated colunms here, or pass them down and hope for
+ * the best? If the clause is a join clause, filtering it out here might save
+ * from creating useless paths. But it could also be confusing to the user.
  */
 static List *
 FilterPushdownClauses(RelOptInfo *rel, List *inputClauses)
@@ -880,7 +887,7 @@ AddColumnarScanPath(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte,
 
 	int numberOfColumnsRead = bms_num_members(rte->selectedCols);
 
-	CostColumnarScan(cpath, rel, rte->relid, numberOfColumnsRead,
+	CostColumnarScan(cpath, root, rel, rte->relid, numberOfColumnsRead,
 					 list_length(cpath->custom_private));
 
 	add_path(rel, path);
@@ -893,20 +900,17 @@ AddColumnarScanPath(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte,
  * columns to read how many pages need to be read.
  */
 static void
-CostColumnarScan(CustomPath *cpath, RelOptInfo *rel, Oid relationId,
-				 int numberOfColumnsRead, int nClauses)
+CostColumnarScan(CustomPath *cpath, PlannerInfo *root, RelOptInfo *rel,
+				 Oid relationId, int numberOfColumnsRead, int nClauses)
 {
 	Path *path = &cpath->path;
-	double stripesToRead = ColumnarTableStripeCount(relationId);
 
-	/*
-	 * XXX: we don't currently have a good way of estimating the selectivity
-	 * of the clauses for chunk group filtering. For now, just assume the
-	 * selectivity of each clause is 0.50. In the future, we can use
-	 * correlation statistics or even just read the metadata directly (though
-	 * the join clauses will have Params and be harder to estimate).
-	 */
-	stripesToRead *= pow(0.50, nClauses);
+	/* XXX: account for correlation here */
+	Selectivity clauseSel = clauselist_selectivity(
+		root, cpath->custom_private, rel->relid, JOIN_INNER, NULL);
+
+	double stripesToRead = clauseSel * ColumnarTableStripeCount(relationId);
+	stripesToRead = Max(stripesToRead, 1.0);
 
 	path->rows = rel->rows;
 	path->startup_cost = 0;
