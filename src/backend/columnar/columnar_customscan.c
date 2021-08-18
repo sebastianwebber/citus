@@ -104,6 +104,7 @@ static set_rel_pathlist_hook_type PreviousSetRelPathlistHook = NULL;
 
 static bool EnableColumnarCustomScan = true;
 static bool EnableColumnarQualPushdown = true;
+static int ColumnarMaxCustomScanPaths = 64;
 
 
 const struct CustomPathMethods ColumnarScanPathMethods = {
@@ -156,6 +157,18 @@ columnar_customscan_init()
 		NULL,
 		&EnableColumnarQualPushdown,
 		true,
+		PGC_USERSET,
+		GUC_NO_SHOW_ALL,
+		NULL, NULL, NULL);
+	DefineCustomIntVariable(
+		"columnar.max_custom_scan_paths",
+		gettext_noop("Maximum number of custom scan paths to generate "
+					 "for a columnar table when planning."),
+		NULL,
+		&ColumnarMaxCustomScanPaths,
+		64,
+		1,
+		1024,
 		PGC_USERSET,
 		GUC_NO_SHOW_ALL,
 		NULL, NULL, NULL);
@@ -655,6 +668,82 @@ FindCandidateRelids(PlannerInfo *root, RelOptInfo *rel, List *joinClauses)
 
 
 /*
+ * combinations() calculates the number of combinations of n things taken k at
+ * a time. Intended for small numbers. If it overflows to inf, that's OK (but
+ * be careful with the calculation to not divide by 0 or inf).
+ */
+static double
+combinations(int n, int k)
+{
+	/*
+	 * combinations(n,k) = n!/(k! * (n-k)!)
+	 *
+	 * = (n * (n-1) * ... * (b+1)) / (2 * 3 * ... * a)
+	 *    where a = min(k, n-k) and b = max(k, n-k)
+	 */
+	Assert(n >= k);
+
+	int a = Min(k, n - k);
+	int b = Max(k, n - k);
+
+	double v = 1;
+
+	/* numerator: n * (n-1) ... * (b+1) */
+	for (int i = n; i > b; i--)
+	{
+		v *= i;
+	}
+
+	/* denominator: 2 * 3 * ... * a */
+	for (int i = 2; i <= a; i++)
+	{
+		v /= i;
+	}
+
+	return v;
+}
+
+
+/*
+ * ChooseDepthLimit() calculates the depth limit for the parameterization
+ * search, given the number of candidate relations.
+ *
+ * The maximum number of paths generated for a given depthLimit is:
+ *
+ *    combinations(nCandidates, 0) + combinations(nCandidates, 1) + ... +
+ *    combinations(nCandidates, depthLimit)
+ *
+ * There's no closed formula for a partial sum of combinations, so just keep
+ * increasing the depth until the number of combinations exceeds the limit.
+ */
+static int
+ChooseDepthLimit(int nCandidates)
+{
+	if (!EnableColumnarQualPushdown)
+	{
+		return 0;
+	}
+
+	int depth = 0;
+	double numPaths = 1;
+
+	while (depth < nCandidates)
+	{
+		numPaths += combinations(nCandidates, depth + 1);
+
+		if (numPaths > (double) ColumnarMaxCustomScanPaths)
+		{
+			break;
+		}
+
+		depth++;
+	}
+
+	return depth;
+}
+
+
+/*
  * AddColumnarScanPaths is the entry point for recursively generating
  * parameterized paths. See AddColumnarScanPathsRec() for discussion.
  */
@@ -664,46 +753,7 @@ AddColumnarScanPaths(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 	List *joinClauses = FindPushdownJoinClauses(root, rel);
 	Relids candidateRelids = FindCandidateRelids(root, rel, joinClauses);
 
-	/*
-	 * The maximum number of paths generated for a given depthLimit is:
-	 *
-	 *    comb(nCandidates, 0) + comb(nCandidates, 1) + ... +
-	 *    comb(nCandidates, depthLimit)
-	 *
-	 * where comb(N, K) is the number of combinations of N things taken K at a
-	 * time.
-	 *
-	 * Choose a depth limit so that a maximum of 64 paths will be generated
-	 * (or nCandidates+1, whichever is greater). There's no closed formula for
-	 * a partial sum of combinations, and there aren't very many cases in
-	 * practice, so just hard-code the depth limits.
-	 *
-	 * Note that the depthLimit becomes the maximum number of required outer
-	 * rels for the path.
-	 */
-	int nCandidates = bms_num_members(candidateRelids);
-	int depthLimit;
-	if (nCandidates <= 6)
-	{
-		depthLimit = nCandidates; /* exhaustive; <= 64 paths */
-	}
-	else if (nCandidates <= 7)
-	{
-		depthLimit = 3; /* 3 levels; <= 64 paths */
-	}
-	else if (nCandidates <= 10)
-	{
-		depthLimit = 2; /* 2 levels; <= 56 paths */
-	}
-	else
-	{
-		depthLimit = 1; /* 1 level; <= nCandidates + 1 paths */
-	}
-
-	if (!EnableColumnarQualPushdown)
-	{
-		depthLimit = 0;
-	}
+	int depthLimit = ChooseDepthLimit(bms_num_members(candidateRelids));
 
 	/* must always parameterize by lateral refs */
 	Relids paramRelids = bms_copy(rel->lateral_relids);
