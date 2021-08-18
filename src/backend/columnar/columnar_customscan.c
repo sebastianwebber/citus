@@ -77,8 +77,8 @@ static void AddColumnarScanPathsRec(PlannerInfo *root, RelOptInfo *rel,
 									int depthLimit);
 static void AddColumnarScanPath(PlannerInfo *root, RelOptInfo *rel,
 								RangeTblEntry *rte, Relids required_relids);
-static Cost ColumnarScanCost(RelOptInfo *rel, Oid relationId, int numberOfColumnsRead, int
-							 nClauses);
+static void CostColumnarScan(CustomPath *cpath, RelOptInfo *rel, Oid relationId,
+							 int numberOfColumnsRead, int nClauses);
 static Cost ColumnarPerStripeScanCost(RelOptInfo *rel, Oid relationId,
 									  int numberOfColumnsRead);
 static uint64 ColumnarTableStripeCount(Oid relationId);
@@ -878,29 +878,25 @@ AddColumnarScanPath(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte,
 		cpath->custom_private = extract_actual_clauses(pushdownClauses, false);
 	}
 
-	/*
-	 * Add cost estimates for a columnar table scan, row count is the rows estimated by
-	 * postgres' planner.
-	 */
-	path->rows = rel->rows;
-	path->startup_cost = 0;
 	int numberOfColumnsRead = bms_num_members(rte->selectedCols);
-	path->total_cost = path->startup_cost +
-					   ColumnarScanCost(rel, rte->relid, numberOfColumnsRead,
-										list_length(cpath->custom_private));
 
-	add_path(rel, (Path *) cpath);
+	CostColumnarScan(cpath, rel, rte->relid, numberOfColumnsRead,
+					 list_length(cpath->custom_private));
+
+	add_path(rel, path);
 }
 
 
 /*
- * ColumnarScanCost calculates the cost of scanning the columnar table. The cost is estimated
- * by using all stripe metadata to estimate based on the columns to read how many pages
- * need to be read.
+ * CostColumnarScan calculates the cost of scanning the columnar table. The
+ * cost is estimated by using all stripe metadata to estimate based on the
+ * columns to read how many pages need to be read.
  */
-static Cost
-ColumnarScanCost(RelOptInfo *rel, Oid relationId, int numberOfColumnsRead, int nClauses)
+static void
+CostColumnarScan(CustomPath *cpath, RelOptInfo *rel, Oid relationId,
+				 int numberOfColumnsRead, int nClauses)
 {
+	Path *path = &cpath->path;
 	double stripesToRead = ColumnarTableStripeCount(relationId);
 
 	/*
@@ -912,8 +908,10 @@ ColumnarScanCost(RelOptInfo *rel, Oid relationId, int numberOfColumnsRead, int n
 	 */
 	stripesToRead *= pow(0.50, nClauses);
 
-	return stripesToRead *
-		   ColumnarPerStripeScanCost(rel, relationId, numberOfColumnsRead);
+	path->rows = rel->rows;
+	path->startup_cost = 0;
+	path->total_cost = stripesToRead *
+		ColumnarPerStripeScanCost(rel, relationId, numberOfColumnsRead);
 }
 
 
