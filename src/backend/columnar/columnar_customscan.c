@@ -67,7 +67,7 @@ static Cost ColumnarIndexScanAddStartupCost(RelOptInfo *rel, Oid relationId,
 											IndexPath *indexPath);
 static Cost ColumnarIndexScanAddTotalCost(PlannerInfo *root, RelOptInfo *rel,
 										  Oid relationId, IndexPath *indexPath);
-static void RecostColumnarSeqPath(RelOptInfo *rel, Oid relationId, Path *path);
+static void CostColumnarSeqPath(RelOptInfo *rel, Oid relationId, Path *path);
 static int RelationIdGetNumberOfAttributes(Oid relationId);
 static void AddColumnarScanPaths(PlannerInfo *root, RelOptInfo *rel,
 								 RangeTblEntry *rte);
@@ -295,7 +295,7 @@ CreateColumnarSeqScanPath(PlannerInfo *root, RelOptInfo *rel, Oid relationId)
 
 	Relids requiredOuter = rel->lateral_relids;
 	Path *path = create_seqscan_path(root, rel, requiredOuter, parallelWorkers);
-	RecostColumnarSeqPath(rel, relationId, path);
+	CostColumnarSeqPath(rel, relationId, path);
 	return path;
 }
 
@@ -323,7 +323,7 @@ RecostColumnarPaths(PlannerInfo *root, RelOptInfo *rel, Oid relationId)
 		}
 		else if (path->pathtype == T_SeqScan)
 		{
-			RecostColumnarSeqPath(rel, relationId, path);
+			CostColumnarSeqPath(rel, relationId, path);
 		}
 	}
 }
@@ -475,11 +475,11 @@ ColumnarIndexScanAddTotalCost(PlannerInfo *root, RelOptInfo *rel,
 
 
 /*
- * RecostColumnarSeqPath re-costs given seq path for columnar table with
+ * CostColumnarSeqPath sets costs given seq path for columnar table with
  * relationId.
  */
 static void
-RecostColumnarSeqPath(RelOptInfo *rel, Oid relationId, Path *path)
+CostColumnarSeqPath(RelOptInfo *rel, Oid relationId, Path *path)
 {
 	if (!enable_seqscan)
 	{
@@ -487,17 +487,16 @@ RecostColumnarSeqPath(RelOptInfo *rel, Oid relationId, Path *path)
 		return;
 	}
 
-	path->startup_cost = 0;
-
 	/*
-	 * Seq scan doesn't support projection pushdown, so we will read all the
-	 * columns.
-	 * Also note that seq scan doesn't support chunk group filtering too but
-	 * our costing model already doesn't consider chunk group filtering.
+	 * Seq scan doesn't support projection or qual pushdown, so we will read
+	 * all the stripes and all the columns.
 	 */
+	double stripesToRead = ColumnarTableStripeCount(relationId);
 	int numberOfColumnsRead = RelationIdGetNumberOfAttributes(relationId);
-	path->total_cost = path->startup_cost +
-					   ColumnarScanCost(rel, relationId, numberOfColumnsRead, 0);
+
+	path->startup_cost = 0;
+	path->total_cost = stripesToRead *
+		   ColumnarPerStripeScanCost(rel, relationId, numberOfColumnsRead);
 }
 
 
