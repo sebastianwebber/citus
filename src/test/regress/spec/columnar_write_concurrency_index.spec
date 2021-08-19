@@ -53,6 +53,11 @@ step "s2-begin"
     BEGIN;
 }
 
+step "s2-begin-repeatable"
+{
+    BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+}
+
 step "s2-commit"
 {
     COMMIT;
@@ -158,5 +163,12 @@ permutation "s1-begin" "s2-begin" "s1-insert-2" "s2-insert-6" "s3-insert-4" "s1-
 permutation "s1-begin" "s1-insert-1" "s2-index-select-all-b" "s1-rollback"
 permutation "s1-begin" "s2-begin" "s1-insert-1" "s2-copy-2" "s2-index-select-all-b" "s3-index-select-all-b" "s1-commit" "s2-index-select-all-b" "s2-rollback"
 
-# force flushing write state of s1 before inserting some more data via s2
+# force flushing write state of s1 before inserting some more data via other sessions
+permutation "s1-begin" "s2-begin" "s1-insert-1" "s1-select-all" "s2-insert-1" "s1-commit" "s2-rollback"
 permutation "s1-begin" "s2-begin" "s1-insert-1" "s1-select-all" "s2-insert-1" "s1-rollback" "s2-rollback"
+permutation "s1-begin" "s1-copy-1" "s1-select-all" "s2-insert-2" "s3-insert-1" "s1-rollback" "s1-select-all"
+permutation "s1-begin" "s1-insert-2" "s1-select-all" "s2-insert-5" "s3-insert-3" "s1-commit" "s1-select-all"
+permutation "s1-begin" "s2-begin" "s1-insert-2" "s1-select-all" "s2-insert-6" "s3-insert-4" "s1-rollback" "s2-rollback" "s1-select-all"
+
+# test with repeatable read isolation mode
+permutation "s1-begin" "s2-begin-repeatable" "s1-insert-1" "s2-insert-1" "s1-commit" "s2-rollback"
