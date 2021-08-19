@@ -26,6 +26,7 @@ $$
     END;
 $$ LANGUAGE PLPGSQL;
 
+set columnar.qual_pushdown_correlation = 0.0;
 
 -- Create and load data
 -- chunk_group_row_limit '1000', stripe_row_limit '2000'
@@ -214,3 +215,5 @@ select filtered_row_count('execute foo(3)');
 select filtered_row_count('execute foo(3)');
 select filtered_row_count('execute foo(3)');
 drop table columnar_prepared_stmt;
+
+set columnar.qual_pushdown_correlation to default;

@@ -109,6 +109,7 @@ static set_rel_pathlist_hook_type PreviousSetRelPathlistHook = NULL;
 
 static bool EnableColumnarCustomScan = true;
 static bool EnableColumnarQualPushdown = true;
+static double ColumnarQualPushdownCorrelation = 0.9;
 static int ColumnarMaxCustomScanPaths = 64;
 
 
@@ -162,6 +163,20 @@ columnar_customscan_init()
 		NULL,
 		&EnableColumnarQualPushdown,
 		true,
+		PGC_USERSET,
+		GUC_NO_SHOW_ALL,
+		NULL, NULL, NULL);
+	DefineCustomRealVariable(
+		"columnar.qual_pushdown_correlation",
+		gettext_noop("Correlation threshold to attempt to push a qual "
+					 "referencing the given column. A value of 0 means "
+					 "attempt to push down all quals, even if the column "
+					 "is uncorrelated."),
+		NULL,
+		&ColumnarQualPushdownCorrelation,
+		0.9,
+		0.0,
+		1.0,
 		PGC_USERSET,
 		GUC_NO_SHOW_ALL,
 		NULL, NULL, NULL);
@@ -557,7 +572,7 @@ CheckVarStats(PlannerInfo *root, Var *var, Oid sortop)
 	 * If the Var is not highly correlated, then the chunk's min/max bounds
 	 * will be nearly useless.
 	 */
-	if (Abs(varCorrelation) < 0.9)
+	if (Abs(varCorrelation) < ColumnarQualPushdownCorrelation)
 	{
 		return false;
 	}
@@ -625,8 +640,6 @@ CheckPushdownClause(PlannerInfo *root, RelOptInfo *rel, Expr *clause)
 										 varOpcInType, BTLessStrategyNumber);
 
 		Assert(OidIsValid(sortop));
-
-		/* XXX: need to check varSide->varcollid matches table att? */
 
 		/*
 		 * Check that statistics on the Var support the utility of this
