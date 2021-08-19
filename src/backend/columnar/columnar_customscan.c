@@ -516,7 +516,7 @@ CostColumnarSeqPath(RelOptInfo *rel, Oid relationId, Path *path)
 
 	path->startup_cost = 0;
 	path->total_cost = stripesToRead *
-		   ColumnarPerStripeScanCost(rel, relationId, numberOfColumnsRead);
+					   ColumnarPerStripeScanCost(rel, relationId, numberOfColumnsRead);
 }
 
 
@@ -791,7 +791,7 @@ Combinations(int n, int k)
 	 * Divide by each factor in the denominator of formula (2), skipping
 	 * division by 1.
 	 */
-	for (int i = k; i >= 2 ; i--)
+	for (int i = k; i >= 2; i--)
 	{
 		v /= i;
 	}
@@ -1004,7 +1004,7 @@ CostColumnarScan(CustomPath *cpath, PlannerInfo *root, RelOptInfo *rel,
 	path->rows = rel->rows;
 	path->startup_cost = 0;
 	path->total_cost = stripesToRead *
-		ColumnarPerStripeScanCost(rel, relationId, numberOfColumnsRead);
+					   ColumnarPerStripeScanCost(rel, relationId, numberOfColumnsRead);
 }
 
 
