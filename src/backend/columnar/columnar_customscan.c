@@ -18,6 +18,9 @@
 
 #include "access/amapi.h"
 #include "access/skey.h"
+#include "catalog/pg_am.h"
+#include "catalog/pg_statistic.h"
+#include "commands/defrem.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/pg_list.h"
@@ -30,6 +33,7 @@
 #include "utils/lsyscache.h"
 #include "utils/relcache.h"
 #include "utils/ruleutils.h"
+#include "utils/selfuncs.h"
 #include "utils/spccache.h"
 
 #include "columnar/columnar.h"
@@ -516,6 +520,53 @@ RelationIdGetNumberOfAttributes(Oid relationId)
 
 
 /*
+ * CheckVarStats() checks whether a qual involving this Var is likely to be
+ * useful based on the correlation stats. If so, or if stats are unavailable,
+ * return true; otherwise return false.
+ */
+static bool
+CheckVarStats(PlannerInfo *root, Var *var, Oid sortop)
+{
+	/*
+	 * Collect isunique, ndistinct, and varCorrelation.
+	 */
+	VariableStatData varStatData;
+	examine_variable(root, (Node *) var, var->varno, &varStatData);
+	if (varStatData.rel == NULL ||
+		!HeapTupleIsValid(varStatData.statsTuple))
+	{
+		return true;
+	}
+
+	AttStatsSlot sslot;
+	if (!get_attstatsslot(&sslot, varStatData.statsTuple,
+						  STATISTIC_KIND_CORRELATION, sortop,
+						  ATTSTATSSLOT_NUMBERS))
+	{
+		ReleaseVariableStats(varStatData);
+		return true;
+	}
+
+	Assert(sslot.nnumbers == 1);
+
+	float4 varCorrelation = sslot.numbers[0];
+
+	ReleaseVariableStats(varStatData);
+
+	/*
+	 * If the Var is not highly correlated, then the chunk's min/max bounds
+	 * will be nearly useless.
+	 */
+	if (Abs(varCorrelation) < 0.9)
+	{
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * CheckPushdownClause tests to see if clause is a candidate for pushing down
  * into the given rel (including join clauses). This test may not be exact in
  * all cases; it's used to reduce the search space for parameterization.
@@ -527,7 +578,7 @@ RelationIdGetNumberOfAttributes(Oid relationId)
  * (or no rels at all).
  */
 static bool
-CheckPushdownClause(RelOptInfo *rel, Expr *clause)
+CheckPushdownClause(PlannerInfo *root, RelOptInfo *rel, Expr *clause)
 {
 	if (IsA(clause, OpExpr))
 	{
@@ -535,26 +586,53 @@ CheckPushdownClause(RelOptInfo *rel, Expr *clause)
 		Expr *lhs = list_nth(opExpr->args, 0);
 		Expr *rhs = list_nth(opExpr->args, 1);
 
-		/*
-		 * If it's not a btree operator for any opclass, it won't work. XXX:
-		 * could tighten this up to make sure it matches the opclass and
-		 * collation of the chunk group filtering predicates.
-		 */
-		if (get_op_btree_interpretation(opExpr->opno) == NIL)
-		{
-			return false;
-		}
-
+		Var *varSide;
 		Expr *exprSide;
 		if (IsA(lhs, Var) && ((Var *) lhs)->varno == rel->relid)
 		{
+			varSide = castNode(Var, lhs);
 			exprSide = rhs;
 		}
 		else if (IsA(rhs, Var) && ((Var *) rhs)->varno == rel->relid)
 		{
+			varSide = castNode(Var, rhs);
 			exprSide = lhs;
 		}
 		else
+		{
+			return false;
+		}
+
+		if (varSide->varattno <= 0)
+		{
+			return false;
+		}
+
+		/*
+		 * Only the default opclass is used for qual pushdown.
+		 */
+		Oid varOpClass = GetDefaultOpClass(varSide->vartype, BTREE_AM_OID);
+		Oid varOpFamily;
+		Oid varOpcInType;
+
+		if (!get_opclass_opfamily_and_input_type(varOpClass, &varOpFamily,
+												 &varOpcInType))
+		{
+			return false;
+		}
+
+		Oid sortop = get_opfamily_member(varOpFamily, varOpcInType,
+										 varOpcInType, BTLessStrategyNumber);
+
+		Assert(OidIsValid(sortop));
+
+		/* XXX: need to check varSide->varcollid matches table att? */
+
+		/*
+		 * Check that statistics on the Var support the utility of this
+		 * clause.
+		 */
+		if (!CheckVarStats(root, varSide, sortop))
 		{
 			return false;
 		}
@@ -586,15 +664,9 @@ CheckPushdownClause(RelOptInfo *rel, Expr *clause)
 /*
  * FilterPushdownClauses filters for clauses that are candidates for pushing
  * down into rel.
- *
- * XXX: the only clauses likely to be useful are either equality clauses or
- * clauses that reference a correlated column. Should we filter out
- * inequalities on uncorrelated colunms here, or pass them down and hope for
- * the best? If the clause is a join clause, filtering it out here might save
- * from creating useless paths. But it could also be confusing to the user.
  */
 static List *
-FilterPushdownClauses(RelOptInfo *rel, List *inputClauses)
+FilterPushdownClauses(PlannerInfo *root, RelOptInfo *rel, List *inputClauses)
 {
 	List *filteredClauses = NIL;
 	ListCell *lc;
@@ -604,7 +676,7 @@ FilterPushdownClauses(RelOptInfo *rel, List *inputClauses)
 
 		if (rinfo->pseudoconstant ||
 			!bms_is_member(rel->relid, rinfo->required_relids) ||
-			!CheckPushdownClause(rel, rinfo->clause))
+			!CheckPushdownClause(root, rel, rinfo->clause))
 		{
 			continue;
 		}
@@ -643,7 +715,7 @@ FindPushdownJoinClauses(PlannerInfo *root, RelOptInfo *rel)
 		rel->lateral_referencers);
 	List *allClauses = list_concat(joinClauses, ecClauses);
 
-	return FilterPushdownClauses(rel, allClauses);
+	return FilterPushdownClauses(root, rel, allClauses);
 }
 
 
@@ -878,7 +950,7 @@ AddColumnarScanPath(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte,
 	 * parameterization (with the given paramRelids), and will be used to
 	 * construct the CustomScan plan.
 	 */
-	List *pushdownClauses = FilterPushdownClauses(rel, allClauses);
+	List *pushdownClauses = FilterPushdownClauses(root, rel, allClauses);
 
 	if (EnableColumnarQualPushdown)
 	{
@@ -905,10 +977,14 @@ CostColumnarScan(CustomPath *cpath, PlannerInfo *root, RelOptInfo *rel,
 {
 	Path *path = &cpath->path;
 
-	/* XXX: account for correlation here */
 	Selectivity clauseSel = clauselist_selectivity(
 		root, cpath->custom_private, rel->relid, JOIN_INNER, NULL);
 
+	/*
+	 * We already filtered out clauses where the overall selectivity would be
+	 * misleading, such as inequalities involving an uncorrelated column. So
+	 * we can apply the selectivity directly to the number of stripes.
+	 */
 	double stripesToRead = clauseSel * ColumnarTableStripeCount(relationId);
 	stripesToRead = Max(stripesToRead, 1.0);
 
