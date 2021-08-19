@@ -271,10 +271,11 @@ init_columnar_read_state(Relation relation, TupleDesc tupdesc, Bitmapset *attr_n
 		 * since we don't see any problem with pushing a new snapshot.
 		 */
 		PushCopiedSnapshot(snapshot);
-		UpdateActiveSnapshotCommandId();
 
 		/* now our snapshot is the active one */
+		UpdateActiveSnapshotCommandId();
 		snapshot = GetActiveSnapshot();
+
 		snapshotCreatedByUs = true;
 	}
 
