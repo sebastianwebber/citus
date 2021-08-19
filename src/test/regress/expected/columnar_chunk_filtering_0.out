@@ -23,6 +23,7 @@ $$
         RETURN result;
     END;
 $$ LANGUAGE PLPGSQL;
+set columnar.qual_pushdown_correlation = 0.0;
 -- Create and load data
 -- chunk_group_row_limit '1000', stripe_row_limit '2000'
 set columnar.stripe_row_limit = 2000;
@@ -304,23 +305,23 @@ EXPLAIN (analyze on, costs off, timing off, summary off)
 SELECT * FROM r1, r2, r3, coltest WHERE
   id1 = id2 AND id2 = id3 AND id3 = id AND
   n1 > x1 AND n2 > x2 AND n3 > x3;
-                                                QUERY PLAN
+                                     QUERY PLAN
 ---------------------------------------------------------------------
  Nested Loop (actual rows=3 loops=1)
-   ->  Nested Loop (actual rows=5 loops=1)
-         Join Filter: (r1.id1 = r3.id3)
-         Rows Removed by Join Filter: 20
-         ->  Nested Loop (actual rows=5 loops=1)
-               Join Filter: (r1.id1 = r2.id2)
-               Rows Removed by Join Filter: 20
+   Join Filter: ((r3.n3 > coltest.x3) AND (r1.id1 = r3.id3))
+   Rows Removed by Join Filter: 12
+   ->  Nested Loop (actual rows=3 loops=1)
+         Join Filter: ((r2.n2 > coltest.x2) AND (r1.id1 = r2.id2))
+         Rows Removed by Join Filter: 12
+         ->  Nested Loop (actual rows=3 loops=1)
                ->  Seq Scan on r1 (actual rows=5 loops=1)
-               ->  Seq Scan on r2 (actual rows=5 loops=5)
-         ->  Seq Scan on r3 (actual rows=5 loops=5)
-   ->  Custom Scan (ColumnarScan) on coltest (actual rows=1 loops=5)
-         Filter: ((r1.n1 > x1) AND (r2.n2 > x2) AND (r3.n3 > x3) AND (r1.id1 = id))
-         Rows Removed by Filter: 799
-         Columnar Chunk Group Filters: ((r1.n1 > x1) AND (r2.n2 > x2) AND (r3.n3 > x3) AND (r1.id1 = id))
-         Columnar Chunk Groups Removed by Filter: 19
+               ->  Custom Scan (ColumnarScan) on coltest (actual rows=1 loops=5)
+                     Filter: ((r1.n1 > x1) AND (r1.id1 = id))
+                     Rows Removed by Filter: 799
+                     Columnar Chunk Group Filters: ((r1.n1 > x1) AND (r1.id1 = id))
+                     Columnar Chunk Groups Removed by Filter: 19
+         ->  Seq Scan on r2 (actual rows=5 loops=3)
+   ->  Seq Scan on r3 (actual rows=5 loops=3)
 (15 rows)
 
 SELECT * FROM r1, r2, r3, coltest WHERE
@@ -419,3 +420,4 @@ select filtered_row_count('execute foo(3)');
 (1 row)
 
 drop table columnar_prepared_stmt;
+set columnar.qual_pushdown_correlation to default;
