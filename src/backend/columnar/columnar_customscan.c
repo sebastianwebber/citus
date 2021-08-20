@@ -96,8 +96,8 @@ static Plan * ColumnarScanPath_PlanCustomPath(PlannerInfo *root,
 
 static Node * ColumnarScan_CreateCustomScanState(CustomScan *cscan);
 
-static void ColumnarScan_BeginCustomScan(CustomScanState *node, EState *estate, int
-										 eflags);
+static void ColumnarScan_BeginCustomScan(CustomScanState *node, EState *estate,
+										 int eflags);
 static TupleTableSlot * ColumnarScan_ExecCustomScan(CustomScanState *node);
 static void ColumnarScan_EndCustomScan(CustomScanState *node);
 static void ColumnarScan_ReScanCustomScan(CustomScanState *node);
@@ -726,8 +726,12 @@ FindPushdownJoinClauses(PlannerInfo *root, RelOptInfo *rel)
 	List *joinClauses = copyObject(rel->joininfo);
 
 	/*
-	 * XXX: Here we are generating the clauses just so we can later extract
-	 * the interesting relids. This can probably be made more efficient.
+	 * Here we are generating the clauses just so we can later extract the
+	 * interesting relids. This is somewhat wasteful, but it allows us to
+	 * filter out joinclauses, reducing the number of relids we need to
+	 * consider.
+	 *
+	 * XXX: also find additional clauses for joininfo that are implied by ECs?
 	 */
 	List *ecClauses = generate_implied_equalities_for_column(
 		root, rel, PushdownJoinClauseMatches, NULL,
@@ -924,6 +928,9 @@ AddColumnarScanPathsRec(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte,
 
 /*
  * Create and add a path with the given parameterization paramRelids.
+ *
+ * XXX: Consider refactoring to be more like postgresGetForeignPaths(). The
+ * only differences are param_info and custom_private.
  */
 static void
 AddColumnarScanPath(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte,
