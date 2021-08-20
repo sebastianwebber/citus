@@ -618,7 +618,13 @@ CheckPushdownClause(PlannerInfo *root, RelOptInfo *rel, Expr *clause)
 			return false;
 		}
 
+		/* cannot push down a qual over the whole row */
 		if (varSide->varattno <= 0)
+		{
+			return false;
+		}
+
+		if (contain_volatile_functions((Node *) exprSide))
 		{
 			return false;
 		}
