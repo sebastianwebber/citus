@@ -967,7 +967,7 @@ AddColumnarScanPath(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte,
 
 	if (EnableColumnarQualPushdown)
 	{
-		cpath->custom_private = extract_actual_clauses(pushdownClauses, false);
+		cpath->custom_private = pushdownClauses;
 	}
 
 	int numberOfColumnsRead = bms_num_members(rte->selectedCols);
@@ -1108,7 +1108,8 @@ ColumnarScanPath_PlanCustomPath(PlannerInfo *root,
 		 * verified that the operators match the btree opclass of the chunk
 		 * predicates.
 		 */
-		cscan->custom_exprs = copyObject(best_path->custom_private);
+		cscan->custom_exprs = copyObject(
+			extract_actual_clauses(best_path->custom_private, false));
 	}
 
 	cscan->scan.plan.qual = extract_actual_clauses(clauses, false);
