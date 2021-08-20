@@ -172,8 +172,10 @@ master_create_distributed_table(PG_FUNCTION_ARGS)
 	Assert(distributionColumn != NULL);
 	char distributionMethod = LookupDistributionMethod(distributionMethodOid);
 
+	bool active_AT_AttachPartition = false;
 	CreateDistributedTable(relationId, distributionColumn, distributionMethod,
-						   ShardCount, false, colocateWithTableName, viaDeprecatedAPI);
+						   ShardCount, false, colocateWithTableName, viaDeprecatedAPI,
+						   active_AT_AttachPartition, InvalidOid);
 
 	relation_close(relation, NoLock);
 
@@ -255,9 +257,10 @@ create_distributed_table(PG_FUNCTION_ARGS)
 							   shardCount, MAX_SHARD_COUNT)));
 	}
 
+	bool active_AT_AttachPartition = false;
 	CreateDistributedTable(relationId, distributionColumn, distributionMethod,
 						   shardCount, shardCountIsStrict, colocateWithTableName,
-						   viaDeprecatedAPI);
+						   viaDeprecatedAPI, active_AT_AttachPartition, InvalidOid);
 
 	PG_RETURN_VOID();
 }
@@ -311,8 +314,10 @@ create_reference_table(PG_FUNCTION_ARGS)
 						errdetail("There are no active worker nodes.")));
 	}
 
+	bool active_AT_AttachPartition = false;
 	CreateDistributedTable(relationId, distributionColumn, DISTRIBUTE_BY_NONE,
-						   ShardCount, false, colocateWithTableName, viaDeprecatedAPI);
+						   ShardCount, false, colocateWithTableName, viaDeprecatedAPI,
+						   active_AT_AttachPartition, InvalidOid);
 	PG_RETURN_VOID();
 }
 
@@ -366,11 +371,17 @@ EnsureRelationExists(Oid relationId)
  * viaDeprecatedAPI boolean flag is not optimal way to implement this function,
  * but it helps reducing code duplication a lot. We hope to remove that flag one
  * day, once we deprecate master_create_distribute_table completely.
+ *
+ * It might be the case that we are during an active AT_AttachPartition command,
+ * and the change hasn't been applied YET locally. We use active_AT_AttachPartition flag
+ * and the oid of the parent for partition table checks, since relationId isn't YET a
+ * partition in catalog tables.
  */
 void
 CreateDistributedTable(Oid relationId, Var *distributionColumn, char distributionMethod,
 					   int shardCount, bool shardCountIsStrict,
-					   char *colocateWithTableName, bool viaDeprecatedAPI)
+					   char *colocateWithTableName, bool viaDeprecatedAPI, bool
+					   active_AT_AttachPartition, Oid parentRelationId)
 {
 	/*
 	 * EnsureTableNotDistributed errors out when relation is a citus table but
@@ -447,9 +458,13 @@ CreateDistributedTable(Oid relationId, Var *distributionColumn, char distributio
 	 * the parent. That's why we override the distribution column of partitions
 	 * here. See issue #5123 for details.
 	 */
-	if (PartitionTable(relationId))
+	if (PartitionTable(relationId) || active_AT_AttachPartition)
 	{
-		Oid parentRelationId = PartitionParentOid(relationId);
+		if (parentRelationId == InvalidOid)
+		{
+			parentRelationId = PartitionParentOid(relationId);
+		}
+
 		char *distributionColumnName =
 			ColumnToColumnName(parentRelationId, nodeToString(distributionColumn));
 
@@ -556,9 +571,11 @@ CreateDistributedTable(Oid relationId, Var *distributionColumn, char distributio
 		Oid partitionRelationId = InvalidOid;
 		foreach_oid(partitionRelationId, partitionList)
 		{
+			bool active_AT_AttachPartition_0 = false;
 			CreateDistributedTable(partitionRelationId, distributionColumn,
 								   distributionMethod, shardCount, false,
-								   colocateWithTableName, viaDeprecatedAPI);
+								   colocateWithTableName, viaDeprecatedAPI,
+								   active_AT_AttachPartition_0, InvalidOid);
 		}
 	}
 

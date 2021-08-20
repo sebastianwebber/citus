@@ -364,15 +364,17 @@ PostprocessCreateTableStmtPartitionOf(CreateStmt *createStatement, const
 		SwitchToSequentialAndLocalExecutionIfPartitionNameTooLong(parentRelationId,
 																  relationId);
 
+		bool active_AT_AttachPartition = false;
 		CreateDistributedTable(relationId, parentDistributionColumn,
 							   parentDistributionMethod, ShardCount, false,
-							   parentRelationName, viaDeprecatedAPI);
+							   parentRelationName, viaDeprecatedAPI,
+							   active_AT_AttachPartition, InvalidOid);
 	}
 }
 
 
 /*
- * PostprocessAlterTableStmtAttachPartition takes AlterTableStmt object as
+ * PreprocessAlterTableStmtAttachPartition takes AlterTableStmt object as
  * parameter but it only processes into ALTER TABLE ... ATTACH PARTITION
  * commands and distributes the partition if necessary. There are four cases
  * to consider;
@@ -399,8 +401,8 @@ PostprocessCreateTableStmtPartitionOf(CreateStmt *createStatement, const
  * ATTACH PARTITION OF command.
  */
 List *
-PostprocessAlterTableStmtAttachPartition(AlterTableStmt *alterTableStatement,
-										 const char *queryString)
+PreprocessAlterTableStmtAttachPartition(AlterTableStmt *alterTableStatement,
+										const char *queryString)
 {
 	List *commandList = alterTableStatement->cmds;
 	AlterTableCmd *alterTableCommand = NULL;
@@ -441,9 +443,12 @@ PostprocessAlterTableStmtAttachPartition(AlterTableStmt *alterTableStatement,
 				SwitchToSequentialAndLocalExecutionIfPartitionNameTooLong(
 					relationId, partitionRelationId);
 
+				bool active_AT_AttachPartition = true;
+				Oid parentRelationId = relationId;
 				CreateDistributedTable(partitionRelationId, distributionColumn,
 									   distributionMethod, ShardCount, false,
-									   parentRelationName, viaDeprecatedAPI);
+									   parentRelationName, viaDeprecatedAPI,
+									   active_AT_AttachPartition, parentRelationId);
 			}
 		}
 	}

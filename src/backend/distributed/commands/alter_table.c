@@ -1198,8 +1198,10 @@ CreateDistributedTableLike(TableConversionState *con)
 	}
 
 	char partitionMethod = PartitionMethod(con->relationId);
+	bool active_AT_AttachPartition = false;
 	CreateDistributedTable(con->newRelationId, newDistributionKey, partitionMethod,
-						   newShardCount, true, newColocateWith, false);
+						   newShardCount, true, newColocateWith, false,
+						   active_AT_AttachPartition, InvalidOid);
 }
 
 
@@ -1216,8 +1218,9 @@ CreateCitusTableLike(TableConversionState *con)
 	}
 	else if (IsCitusTableType(con->relationId, REFERENCE_TABLE))
 	{
+		bool active_AT_AttachPartition = false;
 		CreateDistributedTable(con->newRelationId, NULL, DISTRIBUTE_BY_NONE, 0, false,
-							   NULL, false);
+							   NULL, false, active_AT_AttachPartition, InvalidOid);
 	}
 	else if (IsCitusTableType(con->relationId, CITUS_LOCAL_TABLE))
 	{
