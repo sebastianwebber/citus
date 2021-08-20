@@ -232,6 +232,7 @@ extern ChunkData * CreateEmptyChunkData(uint32 columnCount, bool *columnMask,
 extern void FreeChunkData(ChunkData *chunkData);
 extern uint64 ColumnarTableRowCount(Relation relation);
 extern const char * CompressionTypeStr(CompressionType type);
+extern List * DeduplicateVarList(List *varList, int natts);
 
 /* columnar_metadata_tables.c */
 extern void InitColumnarOptions(Oid regclass);

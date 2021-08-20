@@ -1042,16 +1042,38 @@ GetClauseVars(List *whereClauseList, int natts)
 	 */
 	int flags = 0;
 	List *vars = pull_var_clause((Node *) whereClauseList, flags);
-	Var **deduplicate = palloc0(sizeof(Var *) * natts);
+	return DeduplicateVarList(vars, natts);
+}
+
+
+/*
+ * DeduplicateVarList takes a list of Var objects, and deduplicates and
+ * sorts them in a new list.
+ *
+ * Note that this function doesn't expect any Var's referencing to a system
+ * column or to an invalid attribute. If given varList contains such a Var,
+ * then throws an error.
+ */
+List *
+DeduplicateVarList(List *varList, int natts)
+{
+	Var **deduplicate = palloc0(sizeof(Var *) * (natts + 1));
 
 	ListCell *lc;
-	foreach(lc, vars)
+	foreach(lc, varList)
 	{
 		Node *node = lfirst(lc);
 		Assert(IsA(node, Var));
 
 		Var *var = (Var *) node;
-		int idx = var->varattno - 1;
+		int idx = var->varattno;
+
+		if (idx < 0 || idx > natts)
+		{
+			/* not expected but throw an error instead of segfaulting */
+			ereport(ERROR, (errmsg("unexpected attribute found when "
+								   "deduplicating Var list")));
+		}
 
 		if (deduplicate[idx] != NULL)
 		{
@@ -1062,19 +1084,19 @@ GetClauseVars(List *whereClauseList, int natts)
 		deduplicate[idx] = var;
 	}
 
-	List *whereClauseVars = NIL;
-	for (int i = 0; i < natts; i++)
+	List *uniqueVarList = NIL;
+	for (int i = 0; i <= natts; i++)
 	{
 		Var *var = deduplicate[i];
 		if (var != NULL)
 		{
-			whereClauseVars = lappend(whereClauseVars, var);
+			uniqueVarList = lappend(uniqueVarList, var);
 		}
 	}
 
 	pfree(deduplicate);
 
-	return whereClauseVars;
+	return uniqueVarList;
 }
 
 
