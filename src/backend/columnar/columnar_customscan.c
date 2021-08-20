@@ -17,6 +17,7 @@
 #include "access/amapi.h"
 #include "access/skey.h"
 #include "nodes/extensible.h"
+#include "nodes/makefuncs.h"
 #include "nodes/pg_list.h"
 #include "nodes/plannodes.h"
 #include "optimizer/cost.h"
@@ -25,7 +26,9 @@
 #include "optimizer/paths.h"
 #include "optimizer/restrictinfo.h"
 #include "utils/relcache.h"
+#include "utils/ruleutils.h"
 #include "utils/spccache.h"
+#include "utils/syscache.h"
 
 #include "columnar/columnar.h"
 #include "columnar/columnar_customscan.h"
@@ -88,6 +91,8 @@ static void ColumnarScan_ExplainCustomScan(CustomScanState *node, List *ancestor
 static Bitmapset * ColumnarAttrNeeded(ScanState *ss);
 static List * ColumnarVarNeeded(ScanState *ss);
 static void ColumnarCheckVarListAttrNumSupported(List *varList);
+static char * ColumnarScanProjectedColumnsStr(CustomScanState *node, List *ancestors,
+											  ExplainState *es);
 
 /* saved hook value in case of unload */
 static set_rel_pathlist_hook_type PreviousSetRelPathlistHook = NULL;
@@ -866,4 +871,42 @@ ColumnarScan_ExplainCustomScan(CustomScanState *node, List *ancestors,
 		ExplainPropertyInteger("Columnar Chunk Groups Removed by Filter", NULL,
 							   chunkGroupsFiltered, es);
 	}
+
+	char *projectedColumnsStr = ColumnarScanProjectedColumnsStr(node, ancestors, es);
+	if (projectedColumnsStr)
+	{
+		ExplainPropertyText("Columnar Projected Columns", projectedColumnsStr, es);
+	}
+}
+
+
+/*
+ * ColumnarScanProjectedColumnsStr generates projected column string for
+ * explain output. Returns NULL if no columns will be projected.
+ */
+static char *
+ColumnarScanProjectedColumnsStr(CustomScanState *node, List *ancestors, ExplainState *es)
+{
+	ScanState *scanState = &node->ss;
+	List *neededVarList = ColumnarVarNeeded(scanState);
+	int natts = RelationGetNumberOfAttributes(scanState->ss_currentRelation);
+	List *uniqueVarList = DeduplicateVarList(neededVarList, natts);
+	if (list_length(uniqueVarList) == 0)
+	{
+		return NULL;
+	}
+
+#if PG_VERSION_NUM >= 130000
+	List *context =
+		set_deparse_context_plan(es->deparse_cxt, scanState->ps.plan, ancestors);
+#else
+	List *context =
+		set_deparse_context_planstate(es->deparse_cxt, (Node *) &scanState->ps,
+									  ancestors);
+#endif
+
+	bool useTableNamePrefix = false;
+	bool showImplicitCast = false;
+	return deparse_expression((Node *) uniqueVarList, context,
+							  useTableNamePrefix, showImplicitCast);
 }
