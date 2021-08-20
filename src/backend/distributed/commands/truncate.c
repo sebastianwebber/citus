@@ -92,8 +92,8 @@ citus_truncate_trigger(PG_FUNCTION_ARGS)
 
 		DirectFunctionCall3(citus_drop_all_shards,
 							ObjectIdGetDatum(relationId),
-							CStringGetTextDatum(relationName),
-							CStringGetTextDatum(schemaName));
+							CStringGetTextDatum(schemaName),
+							CStringGetTextDatum(relationName));
 	}
 	else
 	{
