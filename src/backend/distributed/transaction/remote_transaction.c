@@ -810,7 +810,8 @@ CoordinatedRemoteTransactionsPrepare(void)
 			/*
 			 * Verify that the connection didn't modify any placement
 			 */
-			Assert(!ConnectionModifiedPlacement(connection));
+			Assert(transaction->transactionFailed || !ConnectionModifiedPlacement(
+					   connection));
 			continue;
 		}
 
