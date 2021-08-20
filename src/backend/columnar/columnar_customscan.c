@@ -85,6 +85,9 @@ static void ColumnarScan_EndCustomScan(CustomScanState *node);
 static void ColumnarScan_ReScanCustomScan(CustomScanState *node);
 static void ColumnarScan_ExplainCustomScan(CustomScanState *node, List *ancestors,
 										   ExplainState *es);
+static Bitmapset * ColumnarAttrNeeded(ScanState *ss);
+static List * ColumnarVarNeeded(ScanState *ss);
+static void ColumnarCheckVarListAttrNumSupported(List *varList);
 
 /* saved hook value in case of unload */
 static set_rel_pathlist_hook_type PreviousSetRelPathlistHook = NULL;
@@ -671,29 +674,24 @@ ColumnarScan_BeginCustomScan(CustomScanState *cscanstate, EState *estate, int ef
 }
 
 
+/*
+ * ColumnarAttrNeeded returns a list of AttrNumber's for the ones that are
+ * needed during columnar custom scan.
+ * Throws an error if finds a Var referencing to an attribute not supported
+ * by ColumnarScan.
+ */
 static Bitmapset *
 ColumnarAttrNeeded(ScanState *ss)
 {
 	TupleTableSlot *slot = ss->ss_ScanTupleSlot;
 	int natts = slot->tts_tupleDescriptor->natts;
 	Bitmapset *attr_needed = NULL;
-	Plan *plan = ss->ps.plan;
-	int flags = PVC_RECURSE_AGGREGATES |
-				PVC_RECURSE_WINDOWFUNCS | PVC_RECURSE_PLACEHOLDERS;
-	List *vars = list_concat(pull_var_clause((Node *) plan->targetlist, flags),
-							 pull_var_clause((Node *) plan->qual, flags));
+	List *vars = ColumnarVarNeeded(ss);
 	ListCell *lc;
 
 	foreach(lc, vars)
 	{
 		Var *var = lfirst(lc);
-
-		if (var->varattno < 0)
-		{
-			ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							errmsg(
-								"UPDATE and CTID scans not supported for ColumnarScan")));
-		}
 
 		if (var->varattno == 0)
 		{
@@ -709,6 +707,45 @@ ColumnarAttrNeeded(ScanState *ss)
 	}
 
 	return attr_needed;
+}
+
+
+/*
+ * ColumnarVarNeeded returns a list of Var objects for the ones that are
+ * needed during columnar custom scan.
+ * Throws an error if finds a Var referencing to an attribute not supported
+ * by ColumnarScan.
+ */
+static List *
+ColumnarVarNeeded(ScanState *ss)
+{
+	Plan *plan = ss->ps.plan;
+	int flags = PVC_RECURSE_AGGREGATES |
+				PVC_RECURSE_WINDOWFUNCS | PVC_RECURSE_PLACEHOLDERS;
+	List *varList = list_concat(pull_var_clause((Node *) plan->targetlist, flags),
+								pull_var_clause((Node *) plan->qual, flags));
+	ColumnarCheckVarListAttrNumSupported(varList);
+	return varList;
+}
+
+
+/*
+ * ColumnarCheckVarListAttrNumSupported throws an error if given varList
+ * references an attribute not supported by ColumnarScan.
+ */
+static void
+ColumnarCheckVarListAttrNumSupported(List *varList)
+{
+	Var *var = NULL;
+	foreach_ptr(var, varList)
+	{
+		if (var->varattno < 0)
+		{
+			ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							errmsg("UPDATE and CTID scans not supported "
+								   "for ColumnarScan")));
+		}
+	}
 }
 
 
