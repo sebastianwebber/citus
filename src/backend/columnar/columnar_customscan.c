@@ -763,7 +763,8 @@ FindCandidateRelids(PlannerInfo *root, RelOptInfo *rel, List *joinClauses)
 										  rinfo->required_relids);
 	}
 
-	candidateRelids = bms_del_member(candidateRelids, rel->relid);
+	candidateRelids = bms_del_members(candidateRelids, rel->relids);
+	candidateRelids = bms_del_members(candidateRelids, rel->lateral_relids);
 	return candidateRelids;
 }
 
@@ -873,6 +874,10 @@ AddColumnarScanPaths(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
  * AddColumnarScanPathsRec is a recursive function to search the
  * parameterization space and add CustomPaths for columnar scans.
  *
+ * The set paramRelids is the parameterization at the current level, and
+ * candidateRelids is the set from which we draw to generate paths with
+ * greater parameterization.
+ *
  * Columnar tables resemble indexes because of the ability to push down
  * quals. Ordinary quals, such as x = 7, can be pushed down easily. But join
  * quals of the form "x = y" (where "y" comes from another rel) require the
@@ -900,6 +905,7 @@ AddColumnarScanPathsRec(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte,
 						Relids paramRelids, Relids candidateRelids,
 						int depthLimit)
 {
+	Assert(!bms_overlap(paramRelids, candidateRelids));
 	AddColumnarScanPath(root, rel, rte, paramRelids);
 
 	/* recurse for all candidateRelids, unless we hit the depth limit */
@@ -909,6 +915,11 @@ AddColumnarScanPathsRec(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte,
 		return;
 	}
 
+	/*
+	 * Iterate through parameter combinations depth-first. Deeper levels
+	 * generate paths of greater parameterization (and hopefully lower
+	 * cost).
+	 */
 	Relids tmpCandidateRelids = bms_copy(candidateRelids);
 	int relid = -1;
 	while ((relid = bms_next_member(candidateRelids, relid)) >= 0)
@@ -916,6 +927,11 @@ AddColumnarScanPathsRec(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte,
 		Relids tmpParamRelids = bms_add_member(
 			bms_copy(paramRelids), relid);
 
+		/*
+		 * Because we are generating combinations (not permutations), remove
+		 * the relid from the set of candidates at this level as we descend to
+		 * the next.
+		 */
 		tmpCandidateRelids = bms_del_member(tmpCandidateRelids, relid);
 
 		AddColumnarScanPathsRec(root, rel, rte, tmpParamRelids,
@@ -1122,10 +1138,12 @@ ColumnarScanPath_PlanCustomPath(PlannerInfo *root,
 		 * predicates.
 		 */
 		cscan->custom_exprs = copyObject(
-			extract_actual_clauses(best_path->custom_private, false));
+			extract_actual_clauses(best_path->custom_private,
+								   false /* no pseudoconstants */));
 	}
 
-	cscan->scan.plan.qual = extract_actual_clauses(clauses, false);
+	cscan->scan.plan.qual = extract_actual_clauses(
+		clauses, false /* no pseudoconstants */);
 	cscan->scan.plan.targetlist = list_copy(tlist);
 	cscan->scan.scanrelid = best_path->path.parent->relid;
 

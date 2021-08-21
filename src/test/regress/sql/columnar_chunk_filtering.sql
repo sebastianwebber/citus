@@ -121,6 +121,10 @@ set columnar.chunk_group_row_limit = 1000;
 create table r1(id1 int, n1 int); -- row
 create table r2(id2 int, n2 int); -- row
 create table r3(id3 int, n3 int); -- row
+create table r4(id4 int, n4 int); -- row
+create table r5(id5 int, n5 int); -- row
+create table r6(id6 int, n6 int); -- row
+create table r7(id7 int, n7 int); -- row
 
 create table coltest(id int, x1 int, x2 int, x3 int) using columnar;
 create table coltest_part(id int, x1 int, x2 int, x3 int)
@@ -152,6 +156,11 @@ insert into r3 values(9101, 17600075);
 insert into r3 values(14202, 775);
 insert into r3 values(18942, 18943075);
 
+insert into r4 values(1234, -1);
+insert into r5 values(1234, -1);
+insert into r6 values(1234, -1);
+insert into r7 values(1234, -1);
+
 insert into coltest
   select g, g*10, g*100, g*1000 from generate_series(0, 19999) g;
 insert into coltest_part
@@ -174,10 +183,12 @@ SELECT * FROM r1, coltest WHERE
 -- test equivalence classes
 
 EXPLAIN (analyze on, costs off, timing off, summary off)
-SELECT * FROM r1, r2, r3, coltest WHERE
-  id1 = id2 AND id2 = id3 AND id3 = id;
-SELECT * FROM r1, r2, r3, coltest WHERE
-  id1 = id2 AND id2 = id3 AND id3 = id;
+SELECT * FROM r1, r2, r3, r4, r5, r6, r7, coltest WHERE
+  id = id1 AND id1 = id2 AND id2 = id3 AND id3 = id4 AND
+  id4 = id5 AND id5 = id6 AND id6 = id7;
+SELECT * FROM r1, r2, r3, r4, r5, r6, r7, coltest WHERE
+  id = id1 AND id1 = id2 AND id2 = id3 AND id3 = id4 AND
+  id4 = id5 AND id5 = id6 AND id6 = id7;
 
 -- test more complex parameterization
 
